@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Composite Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07090d; --surface:#0c1016; --surface-2:#121821; --surface-3:#19212d;
+  --line:#1f2937; --line-2:#2b3646;
+  --ink:#e8edf3; --ink-2:#a9b4c2; --ink-3:#6e7b8c;
+  --accent:#4fd1c5; --accent-ink:#04201d;
+  --up:#3fb97a; --down:#e66767;
+  --flow:#3987e5; --burst:#c98414;
+  --series-1:#3987e5; --series-2:#c98414;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:"Inter Tight",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
+  background:repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px)}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1500px;margin:0 auto;padding:0 20px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+header.top{border-bottom:1px solid var(--line);background:var(--surface)}
+.top .wrap{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;padding-top:14px;padding-bottom:14px}
+.brand{font-family:var(--mono);font-weight:600;letter-spacing:.14em;font-size:13px;text-transform:uppercase}
+.brand b{color:var(--accent);font-weight:600}
+nav.site{display:flex;gap:18px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+nav.site a{color:var(--ink-3)} nav.site a[aria-current]{color:var(--ink)}
+.status{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-2);display:flex;flex-wrap:wrap;gap:4px 18px}
+.status b{color:var(--ink);font-weight:500}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:1px}
+.dot.stale{background:var(--burst)}
+
+.hero{padding:26px 0 8px;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:28px;align-items:end}
+.hero h1{font-size:30px;line-height:1.1;margin:0 0 8px;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+.hero p{margin:0;color:var(--ink-2);max-width:62ch}
+.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.tile{background:var(--surface);padding:12px 14px}
+.tile .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.tile .v{font-family:var(--mono);font-size:22px;font-weight:500;margin-top:2px;white-space:nowrap}
+
+.tabs{display:flex;gap:2px;margin-top:22px;border-bottom:1px solid var(--line);overflow-x:auto}
+.tab{background:none;border:0;border-bottom:2px solid transparent;padding:10px 16px;cursor:pointer;color:var(--ink-3);
+  font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.panel{padding:18px 0 40px} .panel[hidden]{display:none}
+
+h2.sec{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:500;margin:18px 0 10px}
+.stage{display:grid;grid-template-columns:118px minmax(0,1fr);gap:12px;align-items:start;margin-bottom:8px}
+.stage > .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);padding-top:11px}
+.stage > .lbl small{display:block;color:var(--ink-3);letter-spacing:.04em;text-transform:none;font-size:11px;margin-top:2px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.card{text-align:left;background:var(--surface);border:1px solid var(--line);padding:10px 12px;cursor:pointer;position:relative;
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+.card:hover{border-color:var(--line-2);background:var(--surface-2)}
+.card[aria-pressed="true"]{border-color:var(--accent);background:var(--surface-2)}
+.card .nm{font-weight:600;font-size:13.5px;display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.card .ct{font-family:var(--mono);font-size:15px;font-weight:500}
+.card .ct.zero{color:var(--ink-3)}
+.card .ds{color:var(--ink-3);font-size:12px;margin-top:3px}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
+.chip{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap}
+.chip.flow{border-color:var(--flow);color:#9cc4f5} .chip.burst{border-color:var(--burst);color:#e6bd7c}
+.chip.new{border-color:var(--accent);color:var(--accent)}
+
+.filters{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:end;background:var(--surface);border:1px solid var(--line);padding:12px 14px;margin-top:18px}
+.f{display:flex;flex-direction:column;gap:4px}
+.f label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.f input,.f select{background:var(--bg);border:1px solid var(--line-2);color:var(--ink);padding:6px 8px;font-family:var(--mono);font-size:12.5px;min-width:0;border-radius:0}
+.f input[type=number]{width:92px} .f input[type=search]{width:150px} .f select{max-width:210px}
+.f.check{flex-direction:row;align-items:center;gap:7px;padding-bottom:6px}
+.f.check label{font-size:11px;color:var(--ink-2)}
+.btn{background:var(--surface-3);border:1px solid var(--line-2);padding:6px 12px;cursor:pointer;font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;
+  clip-path:polygon(0 0,calc(100% - 7px) 0,100% 7px,100% 100%,0 100%)}
+.btn:hover{background:var(--line-2)}
+.spacer{flex:1}
+.active{margin:14px 0 8px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;justify-content:space-between}
+.active .what{font-size:15px;font-weight:600}
+.active .what small{font-weight:400;color:var(--ink-3);font-size:12.5px;margin-left:8px}
+.rule{color:var(--ink-2);font-size:12.5px;margin:0 0 10px;max-width:120ch}
+.rule b{color:var(--ink);font-weight:600}
+
+.tablebox{border:1px solid var(--line);background:var(--surface);overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:7px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+th{position:sticky;top:0;background:var(--surface-2);font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:500;cursor:pointer;user-select:none}
+th:hover{color:var(--ink)} th[aria-sort]{color:var(--ink)}
+th[aria-sort=descending]::after{content:" ▼";font-size:8px} th[aria-sort=ascending]::after{content:" ▲";font-size:8px}
+th.l,td.l{text-align:left}
+tbody tr{cursor:pointer} tbody tr:hover{background:var(--surface-2)}
+td.sym{font-family:var(--mono);font-weight:600}
+td .nm{display:block;font-family:var(--sans);font-weight:400;color:var(--ink-3);font-size:11.5px;max-width:190px;overflow:hidden;text-overflow:ellipsis}
+td.grp{color:var(--ink-2);font-size:12px;max-width:190px;overflow:hidden;text-overflow:ellipsis}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.up{color:var(--up)} .down{color:var(--down)} .mute{color:var(--ink-3)}
+.score{display:inline-block;min-width:34px;text-align:center;padding:1px 6px;font-family:var(--mono);font-weight:600;color:var(--ink);border:1px solid var(--line-2)}
+.meter{display:inline-flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:44px}
+.meter i{display:block;height:3px;width:44px;background:var(--line);position:relative}
+.meter i::after{content:"";position:absolute;left:0;top:0;bottom:0;width:var(--w);background:var(--ink-2)}
+td.scans{text-align:left;white-space:normal;min-width:170px}
+td.scans .chip{margin:1px 3px 1px 0;display:inline-block}
+.more{display:flex;justify-content:center;padding:14px}
+.empty{padding:36px 20px;text-align:center;color:var(--ink-2)}
+.empty code{font-family:var(--mono);background:var(--surface-2);padding:1px 5px}
+
+.prose{max-width:92ch;color:var(--ink-2)} .prose h3{color:var(--ink);font-size:16px;margin:22px 0 6px} .prose b{color:var(--ink)}
+.prose ul{padding-left:18px;margin:6px 0} .prose li{margin:3px 0}
+.formula{font-family:var(--mono);background:var(--surface);border:1px solid var(--line);padding:12px 14px;color:var(--ink);margin:10px 0;display:inline-block}
+.blocks{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin:12px 0}
+.block{background:var(--surface);border:1px solid var(--line);padding:12px 14px}
+.block h4{margin:0 0 6px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink)}
+.block table{font-size:12.5px} .block td{padding:4px 0;border:0;white-space:normal} .block td:first-child{text-align:left;color:var(--ink-2)}
+.note{border-left:2px solid var(--burst);padding:8px 12px;background:var(--surface);margin:14px 0;color:var(--ink-2);font-size:13px}
+
+dialog{background:var(--surface);color:var(--ink);border:1px solid var(--line-2);padding:0;width:min(980px,calc(100vw - 24px));max-height:calc(100vh - 24px)}
+dialog::backdrop{background:rgba(3,5,8,.78)}
+.dh{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface);z-index:2}
+.dh h3{margin:0;font-family:var(--mono);font-size:22px} .dh .sub{color:var(--ink-2);font-size:13px}
+.dh .px{font-family:var(--mono);font-size:18px;text-align:right}
+.db{padding:16px 18px 20px}
+.dgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px}
+.chart{position:relative;border:1px solid var(--line);background:var(--surface);padding:10px 10px 4px;margin-bottom:14px}
+.chart svg{display:block;width:100%;height:auto}
+.legend{display:flex;gap:16px;font-size:12px;color:var(--ink-2);margin:0 0 4px 4px;flex-wrap:wrap}
+.legend span::before{content:"";display:inline-block;width:14px;height:2px;margin-right:6px;vertical-align:middle;background:var(--c)}
+.legend span.dash::before{background:repeating-linear-gradient(90deg,var(--c) 0 4px,transparent 4px 7px)}
+.tip{position:absolute;pointer-events:none;background:var(--surface-3);border:1px solid var(--line-2);padding:6px 9px;font-family:var(--mono);font-size:11.5px;display:none;white-space:nowrap;z-index:3}
+.hit{margin:0 0 8px;padding:10px 12px;border:1px solid var(--line);background:var(--bg)}
+.hit .t{font-weight:600;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hit p{margin:4px 0 0;color:var(--ink-2);font-size:12.5px}
+footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);font-size:12px}
+
+@media (max-width:900px){
+  .hero{grid-template-columns:1fr} .tiles{grid-template-columns:repeat(2,1fr)}
+  .stage{grid-template-columns:1fr;gap:4px} .stage > .lbl{padding-top:6px}
+  .status{margin-left:0} .dgrid{grid-template-columns:repeat(2,1fr)}
+  .wrap{padding:0 16px} .hero h1{font-size:24px}
+}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="brand"><b>◢</b> Composite Scanner</div>
+  <nav class="site" aria-label="Site">
+    <a href="index.html">Sector rotation</a>
+    <a href="scanner.html">Strat demand</a>
+    <a href="composite.html" aria-current="page">Composite</a>
+  </nav>
+  <div class="status" id="status"><span>Loading scan…</span></div>
+</div></header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <h1>One score from three independent signals.</h1>
+      <p>Every stock gets a 0–100 score for trend, relative strength and momentum from adjusted end-of-day bars. The composite is their plain average, so it rewards stocks where all three line up today. Scans then say which specific setup, if any, is present.</p>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-tab="stocks">Scans</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="groups">Industry groups</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="method">Scoring model</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="valid">Forward validation</button>
+  </div>
+
+  <section class="panel" id="p-stocks">
+    <div id="library"></div>
+    <div class="filters">
+      <div class="f"><label for="q">Ticker / name</label><input id="q" type="search" placeholder="NVDA" autocomplete="off"></div>
+      <div class="f"><label for="minScore">Min score</label><input id="minScore" type="number" min="0" max="100" step="5" value="0"></div>
+      <div class="f"><label for="minPrice">Min price $</label><input id="minPrice" type="number" min="0" step="1" value="5"></div>
+      <div class="f"><label for="minDvol">Min $ vol (M/day)</label><input id="minDvol" type="number" min="0" step="5" value="5"></div>
+      <div class="f"><label for="sector">Sector</label><select id="sector"><option value="">All sectors</option></select></div>
+      <div class="f"><label for="industry">Industry</label><select id="industry"><option value="">All industries</option></select></div>
+      <div class="f check"><input id="onlyNew" type="checkbox"><label for="onlyNew">New to scan today</label></div>
+      <span class="spacer"></span>
+      <button class="btn" id="copy">Copy tickers</button>
+      <button class="btn" id="csv">CSV</button>
+      <button class="btn" id="reset">Reset</button>
+    </div>
+    <div class="active"><div class="what" id="what"></div><div class="mono mute" id="count"></div></div>
+    <p class="rule" id="rule"></p>
+    <div class="tablebox"><table id="tbl"><thead></thead><tbody></tbody></table><div class="empty" id="empty" hidden></div></div>
+    <div class="more"><button class="btn" id="more" hidden>Show more</button></div>
+  </section>
+
+  <section class="panel" id="p-groups" hidden>
+    <p class="rule">Industries ranked by the median relative-strength score of their members (groups with fewer than 4 scored stocks are left out). Click a row to see its stocks.</p>
+    <div class="tablebox"><table id="gtbl"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="panel prose" id="p-method" hidden>
+    <h3>The composite</h3>
+    <div class="formula">Score = ( Trend + Relative strength + Momentum ) ÷ 3, rounded</div>
+    <p><b>It describes condition, not odds.</b> A 90 means trend, relative strength and momentum are all strongly aligned right now. It does not mean a 90% chance of going up. A scan match is still what says whether a complete setup or trigger exists.</p>
+    <div class="blocks">
+      <div class="block"><h4>Trend</h4><table>
+        <tr><td>Price above the 20, 50 and 200-day averages</td><td>30%</td></tr>
+        <tr><td>Averages stacked 20 &gt; 50 &gt; 200</td><td>25%</td></tr>
+        <tr><td>50-day slope over 20 sessions, −6% → +8%</td><td>20%</td></tr>
+        <tr><td>Distance from 52-week high, −30% → 0%</td><td>15%</td></tr>
+        <tr><td>Share of last 60 closes above the 50-day</td><td>10%</td></tr></table></div>
+      <div class="block"><h4>Relative strength</h4><table>
+        <tr><td>12-month return minus benchmark, −30 → +30 pts</td><td>45%</td></tr>
+        <tr><td>6-month, −20 → +20 pts</td><td>35%</td></tr>
+        <tr><td>3-month, −12 → +12 pts</td><td>20%</td></tr>
+        <tr><td colspan="2">Matching the benchmark exactly scores 50.</td></tr></table></div>
+      <div class="block"><h4>Momentum</h4><table>
+        <tr><td>1-month return, −12% → +12%</td><td>30%</td></tr>
+        <tr><td>3-month return, −20% → +30%</td><td>25%</td></tr>
+        <tr><td>1-month return vs a third of the 3-month, −8 → +8 pts</td><td>20%</td></tr>
+        <tr><td>RSI(14) quality, best between 55 and 70</td><td>15%</td></tr>
+        <tr><td>Relative volume, 0.5× → 2×</td><td>10%</td></tr></table></div>
+    </div>
+    <h3>Data and exclusions</h3>
+    <ul>
+      <li>Universe: Russell 1000, S&amp;P 400 and S&amp;P 600 members. Benchmark: <span class="mono" id="benchName">IWB</span> (Russell 1000 ETF, dividends included).</li>
+      <li>Bars are daily, adjusted for splits and dividends, from Yahoo Finance. Short interest is exchange-reported twice a month, so it lags.</li>
+      <li>A stock is left unscored when it has under 260 sessions of history, has no bar for the latest session, or shows a one-day jump that looks like a bad adjustment.</li>
+    </ul>
+    <h3>Where this page fills in the blanks</h3>
+    <p>The scoring weights and scan thresholds follow the published rules. Several terms in those rules have no published definition, so this scanner uses its own. They are settings at the top of <span class="mono">scripts/composite_scan.py</span> and easy to change:</p>
+    <ul>
+      <li><b>Rising average</b>: the 50-day is higher than 10 sessions ago; the 200-day higher than 20 sessions ago.</li>
+      <li><b>ATR extension</b>: distance above the 20-day average, in 14-day ATRs.</li>
+      <li><b>RS acceleration</b>: 3-month excess return minus half the 6-month excess return.</li>
+      <li><b>55-day pivot</b>: highest high of the prior 55 sessions. A break is "fresh" when no close cleared its own pivot in the 10 sessions before.</li>
+      <li><b>Contracting range and volume</b>: last 10 sessions' average true range ≤ 85%, and volume ≤ 90%, of the 30 sessions before them.</li>
+      <li><b>Prior 6-month leadership</b>: at least 10 points ahead of the benchmark over 6 months, with a 52-week high in the last 63 sessions.</li>
+      <li><b>Near an average</b>: from 0.5 ATR below to 1 ATR above it. <b>Strong close</b>: top 35% of the day's range. <b>Weak close</b>: bottom 35%.</li>
+      <li><b>Gap retained</b>: today's close relative to the gap open, measured from the pre-gap close.</li>
+      <li><b>Industry rank</b>: percentile of the industry's median RS score among all industries. <b>Peer rank</b>: the stock's RS percentile inside its industry.</li>
+    </ul>
+    <div class="note">Because of those choices, matches here will not be identical to any other scanner built on the same published rules. Treat the lists as a starting point for chart review.</div>
+  </section>
+
+  <section class="panel" id="p-valid" hidden><div class="prose" id="valid"></div></section>
+</main>
+
+<footer><div class="wrap">For personal research and education. Scores and scan lists are model outputs from delayed end-of-day data, not investment advice or a recommendation to buy or sell anything. Data can be late, missing or wrong; verify on a chart before acting.</div></footer>
+
+<dialog id="dlg" aria-labelledby="d-sym"><div id="dlg-body"></div></dialog>
+
+<script>
+"use strict";
+const SCAN_INFO = {
+  el:{d:"Mature uptrends still close to their highs.",r:"Trend and RS ≥ 80 · above rising 50- and 200-day averages · within 15% of the 52-week high · no more than 2.75 ATR extended",j:"A discovery list for longer holds. Wait for an entry setup."},
+  em:{d:"Newer strength improving faster than the long-term picture shows yet.",r:"Not already an established leader · Momentum ≥ 80 · RS ≥ 65 · RS acceleration ≥ 4 pts · rising 50-day",j:"Track for graduation to leadership or a fast trigger."},
+  br:{d:"Strong stocks going quiet just under a 55-day pivot.",r:"Trend ≥ 60 · RS ≥ 65 · above rising 50- and 200-day · within 3% below the pivot · range and volume contracting",j:"Plan the pivot and the invalidation level. No entry yet."},
+  fb:{d:"First close through the pivot, on volume.",r:"Trend ≥ 60 · RS ≥ 65 · 0–5% through the 55-day pivot · relative volume ≥ 1.35× · strong close · ≤ 2.75 ATR extended",j:"Review for entry now."},
+  bc:{d:"A recent breakout that held its pivot and is turning up again.",r:"First 55-day break 2–10 sessions ago · every close since held the pivot · Trend and RS ≥ 70 · quiet volume · closes above the prior day's high",j:"A second entry without chasing the first move."},
+  cp:{d:"Leaders resetting toward support in an orderly way.",r:"Trend and RS ≥ 70 · prior 6-month leadership · near the 20- or 50-day average · rising 200-day · quiet volume",j:"Watch support. Wait for price to turn before considering entry."},
+  pc:{d:"A controlled pullback that just reversed off support.",r:"Trend and RS ≥ 70 · prior 6-month leadership · rising 200-day · low near the 20- or 50-day · closes above the prior day's high in the top 35% of its range",j:"Review a pullback entry; the support low is the reference."},
+  lr:{d:"A former leader taking back its 50-day after a real reset.",r:"Trend and RS ≥ 55 · positive 6-month return · above a rising 200-day · crosses back above the 50-day on ≥ 1.2× volume · positive RS acceleration",j:"Review a re-entry; the reclaim day's low is the reference."},
+  ei:{d:"A fresh high-volume gap that is holding in its first three sessions.",r:"Gap ≥ 4% in the last 3 sessions · gap-day volume ≥ 1.5× · ≥ 70% of the gap retained · Momentum ≥ 65 · RS ≥ 65",j:"Fast trade. Progress should be immediate."},
+  ed:{d:"A high-volume gap still defended after the first volatile days.",r:"Gap ≥ 4% between 4 and 20 sessions ago · gap-day volume ≥ 1.5× · ≥ 80% retained · Trend ≥ 60 · RS ≥ 70",j:"Review a continuation entry around the defended gap level."},
+  slg:{d:"A standout stock in an industry that has not confirmed yet.",r:"Trend ≥ 70 · RS ≥ 85 · positive RS acceleration · top 15% of peers · RS ≥ 15 pts above the industry median · industry in the 25th–74th percentile and stable",j:"Watch for the group to follow, or demand an exceptional standalone trigger."},
+  grl:{d:"Leading stocks inside industries that are improving but not yet leading.",r:"Industry in the 35th–74th percentile · industry RS accelerating · at least half of peers improving · stock in the top 30% of peers · RS and Momentum ≥ 65",j:"Track the emerging theme; wait for the stock's own setup."},
+  gcl:{d:"Leaders backed by a top-quartile industry.",r:"Trend ≥ 65 · RS ≥ 75 · above the 50-day · industry in the top quartile · stock in the top 30% of peers",j:"Raises priority. Group support confirms; it never triggers an entry."},
+  bdr:{d:"Weak stocks compressing just above support.",r:"RS ≤ 45 · Momentum ≤ 50 · below the 20-day · within 5% of the 20-day low · falling RS · range and volume contracting",j:"Plan a defined-risk bearish trade. Enter only if support breaks on volume."},
+  bb:{d:"A decisive break of support with range and volume expanding.",r:"Fresh close below the 20- or 50-day low · RS ≤ 55 · Momentum ≤ 45 · down 1.5–10% · range 1.15–3.5 ATR · relative volume ≥ 1.25× · weak close",j:"Review a defined-risk bearish trade. Downside should follow through at once."},
+  sq:{d:"Heavily shorted stocks where price is starting to press.",r:"Short interest ≥ 8% of float · days to cover ≥ 2.5 · Momentum ≥ 60 · RS ≥ 55 · above the 20-day and within 8% of the 20-day high · RS not decelerating",j:"A radar list. Enter only on a separate price-and-volume trigger."}
+};
+const STAGES = [["State","Discover","durable strength"],["Watch","Watch","not actionable yet"],["Setup","Prepare","levels defined"],["Trigger","Trigger","review today"],["Overlay","Confirm","context only"]];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = (x, d = 1) => x == null ? "—" : Number(x).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d});
+const sgn = (x, d = 1, suf = "") => x == null ? '<span class="mute">—</span>' : `<span class="${x > 0 ? "up" : x < 0 ? "down" : "mute"}">${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x), d)}${suf}</span>`;
+
+let DATA = null, STOCKS = [], SCANS = {}, CHARTS = null;
+const state = {scan: "", sort: "score", dir: -1, limit: 100};
+
+const COLDEFS = [
+  {k:"sym", h:"Ticker", l:1, html:s=>`${esc(s.sym)}<span class="nm">${esc(s.name||"")}</span>`, cls:"sym"},
+  {k:"ind", h:"Industry", l:1, html:s=>esc(s.ind||s.sec||"—"), cls:"grp"},
+  {k:"close", h:"Close", html:s=>fmt(s.close,2)},
+  {k:"chg", h:"Day %", html:s=>sgn(s.chg,2,"%")},
+  {k:"score", h:"Score", html:s=>`<span class="score">${s.score}</span>`},
+  {k:"dScore", h:"Δ", html:s=>s.dScore?sgn(s.dScore,0):'<span class="mute">·</span>', title:"Score change since the previous scan"},
+  {k:"T", h:"Trend", html:s=>meter(s.T)},
+  {k:"RS", h:"RS", html:s=>meter(s.RS)},
+  {k:"M", h:"Mom", html:s=>meter(s.M)},
+  {k:"rsAccel", h:"RS acc", html:s=>sgn(s.rsAccel,1), title:"3-month excess return minus half the 6-month excess return (points)"},
+  {k:"rvol", h:"RVol", html:s=>s.rvol==null?"—":fmt(s.rvol,2)+"×", title:"Today's volume ÷ 50-day average"},
+  {k:"ext", h:"Ext ATR", html:s=>fmt(s.ext,2), title:"ATRs above (+) or below (−) the 20-day average"},
+  {k:"offHigh", h:"Off high", html:s=>s.offHigh==null?"—":fmt(s.offHigh,1)+"%", title:"Distance from the 52-week high"},
+  {k:"nScans", h:"Scans", l:1, cls:"scans", html:s=>s.scans.map(id=>scanChip(id, s.newScans.includes(id))).join("")||'<span class="mute">—</span>'}
+];
+function meter(v){return `<span class="meter"><span>${fmt(v,0)}</span><i style="--w:${Math.max(0,Math.min(100,v))}%"></i></span>`}
+function modeChips(mode){return mode.split(" + ").map(m=>`<span class="chip ${m.toLowerCase()}">${m}</span>`).join("")}
+function scanChip(id,isNew){const s=SCANS[id];return `<span class="chip${isNew?" new":""}" title="${esc(s.name)}${isNew?" · new today":""}">${esc(s.name)}${isNew?" ●":""}</span>`}
+
+async function load(){
+  try{
+    const r = await fetch("data/composite/latest.json?v=" + Date.now());
+    if(!r.ok) throw new Error(r.status);
+    DATA = await r.json();
+  }catch(e){
+    $("#status").innerHTML = '<span><span class="dot stale"></span>No scan data yet</span>';
+    $("#library").innerHTML = "";
+    const el = $("#empty"); el.hidden = false; $("#tbl").hidden = true;
+    el.innerHTML = 'No results have been published yet.<br>In the GitHub repo open <b>Actions → Composite scan (nightly) → Run workflow</b>. The first run takes about 10 minutes, then reload this page.<br><span class="mute">Expected file: <code>data/composite/latest.json</code></span>';
+    return;
+  }
+  const ci = DATA.cols;
+  STOCKS = DATA.rows.map(r => {const o = {}; ci.forEach((c, i) => o[c] = r[i]); o.nScans = o.scans.length; o.newScans = o.newScans || []; return o;});
+  DATA.scans.forEach(s => SCANS[s.id] = Object.assign({}, s, SCAN_INFO[s.id]));
+  const h = new URLSearchParams(location.hash.slice(1));
+  if(SCANS[h.get("scan")]) state.scan = h.get("scan");
+  renderStatus(); renderLibrary(); fillSelects(); renderHead(); render(); renderGroups(); renderValidation();
+  $("#benchName").textContent = DATA.benchmark;
+}
+
+function renderStatus(){
+  const d = new Date(DATA.asOf + "T12:00:00");
+  const age = (Date.now() - d.getTime()) / 864e5;
+  const gen = new Date(DATA.generatedAt);
+  $("#status").innerHTML =
+    `<span><span class="dot${age > 4 ? " stale" : ""}"></span>Close of <b>${d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"})}</b></span>` +
+    `<span>Updated <b>${gen.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</b></span>` +
+    `<span>vs <b>${esc(DATA.benchmark)}</b></span>`;
+  const trig = STOCKS.filter(s => s.scans.some(id => SCANS[id].stage === "Trigger")).length;
+  const tiles = [["Scored", DATA.scored.toLocaleString() , `of ${DATA.universe.toLocaleString()}`], ["Score ≥ 80", STOCKS.filter(s=>s.score>=80).length, ""],
+                 ["With a trigger", trig, ""], ["Median score", median(STOCKS.map(s=>s.score)), ""]];
+  $("#tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="k">${t[0]}</div><div class="v">${t[1]}${t[2]?` <span class="mute" style="font-size:12px;white-space:nowrap">${t[2]}</span>`:""}</div></div>`).join("");
+}
+function median(a){if(!a.length)return "—";const s=[...a].sort((x,y)=>x-y);return s[Math.floor(s.length/2)]}
+
+function renderLibrary(){
+  let html = '<h2 class="sec">Scan library — discover → watch → prepare → trigger</h2>';
+  for(const [stage, label, hint] of STAGES){
+    const list = DATA.scans.filter(s => s.stage === stage);
+    if(!list.length) continue;
+    html += `<div class="stage"><div class="lbl">${label}<small>${hint}</small></div><div class="cards">` +
+      list.map(s => `<button class="card" data-scan="${s.id}" aria-pressed="${state.scan===s.id}">
+        <div class="nm"><span>${esc(s.name)}</span><span class="ct${s.count?"":" zero"}">${s.count}</span></div>
+        <div class="ds">${esc(SCAN_INFO[s.id].d)}</div>
+        <div class="chips">${modeChips(s.mode)}<span class="chip">${esc(s.family)}</span></div></button>`).join("") + "</div></div>";
+  }
+  $("#library").innerHTML = html;
+  $("#library").onclick = e => {
+    const c = e.target.closest(".card"); if(!c) return;
+    state.scan = state.scan === c.dataset.scan ? "" : c.dataset.scan; state.limit = 100;
+    history.replaceState(null, "", state.scan ? "#scan=" + state.scan : location.pathname + location.search);
+    document.querySelectorAll(".card").forEach(x => x.setAttribute("aria-pressed", x.dataset.scan === state.scan));
+    render();
+    if(state.scan) document.querySelector(".filters").scrollIntoView({behavior: "smooth", block: "start"});
+  };
+}
+
+function fillSelects(){
+  const secs = [...new Set(STOCKS.map(s => s.sec).filter(Boolean))].sort();
+  $("#sector").innerHTML = '<option value="">All sectors</option>' + secs.map(s => `<option>${esc(s)}</option>`).join("");
+  fillIndustries();
+}
+function fillIndustries(){
+  const sec = $("#sector").value, cur = $("#industry").value;
+  const inds = [...new Set(STOCKS.filter(s => !sec || s.sec === sec).map(s => s.ind).filter(Boolean))].sort();
+  $("#industry").innerHTML = '<option value="">All industries</option>' + inds.map(s => `<option>${esc(s)}</option>`).join("");
+  if(inds.includes(cur)) $("#industry").value = cur;
+}
+
+function renderHead(){
+  $("#tbl thead").innerHTML = "<tr>" + COLDEFS.map(c => `<th data-k="${c.k}" class="${c.l?"l":""}" ${c.title?`title="${esc(c.title)}"`:""} ${state.sort===c.k?`aria-sort="${state.dir<0?"descending":"ascending"}"`:""}>${c.h}</th>`).join("") + "</tr>";
+}
+function filtered(){
+  const q = $("#q").value.trim().toUpperCase(), ms = +$("#minScore").value || 0, mp = +$("#minPrice").value || 0, mv = +$("#minDvol").value || 0;
+  const sec = $("#sector").value, ind = $("#industry").value, onlyNew = $("#onlyNew").checked;
+  let rows = STOCKS.filter(s =>
+    (!state.scan || s.scans.includes(state.scan)) && s.score >= ms && s.close >= mp && (s.dvolM ?? 0) >= mv &&
+    (!sec || s.sec === sec) && (!ind || s.ind === ind) &&
+    (!onlyNew || (state.scan ? s.newScans.includes(state.scan) : s.newScans.length > 0)) &&
+    (!q || s.sym.startsWith(q) || (s.name || "").toUpperCase().includes(q)));
+  const k = state.sort, dir = state.dir;
+  rows.sort((a, b) => {
+    const x = a[k], y = b[k];
+    if(x == null && y == null) return 0; if(x == null) return 1; if(y == null) return -1;
+    return (typeof x === "string" ? x.localeCompare(y) : x - y) * dir || b.score - a.score;
+  });
+  return rows;
+}
+function render(){
+  if(!DATA) return;
+  const rows = filtered(), s = SCANS[state.scan];
+  $("#what").innerHTML = s ? `${esc(s.name)}<small>${esc(s.j)}</small>` : `All scored stocks<small>Pick a scan above to narrow the list</small>`;
+  $("#rule").innerHTML = s ? `<b>Rule:</b> ${esc(s.r)}` : "";
+  $("#count").textContent = `${rows.length.toLocaleString()} match${rows.length === 1 ? "" : "es"}`;
+  const shown = rows.slice(0, state.limit);
+  $("#tbl tbody").innerHTML = shown.map(r => `<tr data-sym="${esc(r.sym)}" tabindex="0">` + COLDEFS.map(c => `<td class="${c.l?"l ":"num "}${c.cls||""}">${c.html(r)}</td>`).join("") + "</tr>").join("");
+  $("#tbl").hidden = false;
+  const empty = $("#empty"); empty.hidden = rows.length > 0;
+  if(!rows.length){
+    empty.innerHTML = s && s.id === "sq" && !DATA.shortInterestCovered
+      ? "No short-interest data came back from the data source on this run, so this scan could not be evaluated."
+      : "Nothing matches. That is a normal result for trigger scans on a quiet day — or loosen the filters above.";
+  }
+  $("#more").hidden = rows.length <= state.limit;
+  $("#more").textContent = `Show more (${(rows.length - state.limit).toLocaleString()} left)`;
+}
+
+function renderGroups(){
+  const g = DATA.groups || [];
+  const cols = [["name","Industry",1],["n","Stocks"],["pct","Rank pct"],["rs","Median RS"],["accel","RS acc"],["improving","% improving"],["score","Median score"]];
+  $("#gtbl thead").innerHTML = "<tr>" + cols.map(c => `<th class="${c[2]?"l":""}" style="cursor:default">${c[1]}</th>`).join("") + "</tr>";
+  $("#gtbl tbody").innerHTML = g.map(r => `<tr data-ind="${esc(r.name)}" tabindex="0"><td class="l">${esc(r.name)}</td><td class="num">${r.n}</td><td class="num">${meter(r.pct)}</td><td class="num">${fmt(r.rs,0)}</td><td class="num">${sgn(r.accel,1)}</td><td class="num">${fmt(r.improving,0)}%</td><td class="num">${fmt(r.score,0)}</td></tr>`).join("")
+    || '<tr><td class="l" colspan="7">No industry data on this run.</td></tr>';
+  $("#gtbl tbody").onclick = e => {
+    const tr = e.target.closest("tr[data-ind]"); if(!tr) return;
+    $("#sector").value = ""; fillIndustries(); $("#industry").value = tr.dataset.ind;
+    if(!$("#industry").value){ const s = STOCKS.find(x => (x.ind || x.sec) === tr.dataset.ind); if(s){ $("#sector").value = s.sec || ""; fillIndustries(); } }
+    state.scan = ""; document.querySelectorAll(".card").forEach(x => x.setAttribute("aria-pressed", "false"));
+    showTab("stocks"); render();
+  };
+}
+
+function renderValidation(){
+  const v = DATA.validation || {snapshots: 0, horizons: {}};
+  let html = `<h3>Forward validation</h3><p><b>${v.snapshots}</b> daily snapshot${v.snapshots === 1 ? "" : "s"} stored${v.first ? ` since ${esc(v.first)}` : ""}. Each night's scores and scan lists are saved, and results are measured only from those saved lists once 21, 63 and 126 sessions have actually passed. Nothing here is back-filled or backtested.</p>`;
+  let any = false;
+  for(const hz of ["21", "63", "126"]){
+    const h = v.horizons[hz]; if(!h || !h.days) continue; any = true;
+    const row = (name, st) => st ? `<tr><td class="l">${esc(name)}</td><td class="num">${st.n.toLocaleString()}</td><td class="num">${sgn(st.mean,2,"%")}</td><td class="num">${sgn(st.median,2,"%")}</td><td class="num">${fmt(st.win,0)}%</td></tr>` : "";
+    html += `<h3>${hz} sessions later <span class="mute" style="font-weight:400;font-size:13px">· ${h.days} snapshot day${h.days===1?"":"s"} matured</span></h3>
+      <div class="tablebox"><table><thead><tr><th class="l" style="cursor:default">Group</th><th style="cursor:default">Observations</th><th style="cursor:default">Mean vs benchmark</th><th style="cursor:default">Median</th><th style="cursor:default">Beat benchmark</th></tr></thead><tbody>` +
+      Object.entries(h.buckets).map(([k, st]) => row("Score " + k.replace("-", "–"), st)).join("") +
+      DATA.scans.map(s => row(s.name, h.scans[s.id])).join("") + "</tbody></table></div>";
+  }
+  if(!any) html += `<div class="note">No horizon has matured yet. The first 21-session results appear once the earliest snapshot is 21 trading days old (about a month after the first run).</div>`;
+  else html += `<div class="note">Small samples swing a lot. Overlapping daily snapshots of the same stocks are not independent observations, so read these as a sanity check, not a performance claim.</div>`;
+  $("#valid").innerHTML = html;
+}
+
+/* ---------- detail ---------- */
+async function openDetail(sym){
+  const s = STOCKS.find(x => x.sym === sym); if(!s) return;
+  const hits = s.scans.map(id => {const sc = SCANS[id]; return `<div class="hit"><div class="t">${esc(sc.name)} ${modeChips(sc.mode)}<span class="chip">${esc(sc.stage)}</span>${s.newScans.includes(id)?'<span class="chip new">New today</span>':""}</div><p>${esc(sc.j)}${hitNote(s,id)}</p></div>`}).join("")
+    || '<p class="mute">No scan matches today. The score describes condition only.</p>';
+  const kv = (k, v) => `<tr><td>${k}</td><td class="mono">${v}</td></tr>`;
+  $("#dlg-body").innerHTML = `
+  <div class="dh"><div><h3 id="d-sym">${esc(s.sym)}</h3><div class="sub">${esc(s.name||"")} · ${esc(s.ind||s.sec||"")}</div></div>
+    <div><div class="px">${fmt(s.close,2)} ${sgn(s.chg,2,"%")}</div><div style="text-align:right;margin-top:6px"><a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(s.sym.replace("-","."))}" target="_blank" rel="noopener">Open chart ↗</a> &nbsp; <button class="btn" id="d-close">Close</button></div></div></div>
+  <div class="db">
+    <div class="dgrid">${[["Composite",s.score],["Trend",fmt(s.T,0)],["Rel. strength",fmt(s.RS,0)],["Momentum",fmt(s.M,0)]].map(t=>`<div class="tile"><div class="k">${t[0]}</div><div class="v">${t[1]}</div></div>`).join("")}</div>
+    <div class="chart" id="chart"><div class="mute" style="padding:18px">Loading chart…</div></div>
+    <h2 class="sec">Scan matches</h2>${hits}
+    <div class="blocks">
+      <div class="block"><h4>Trend inputs</h4><table>
+        ${kv("vs 20 / 50 / 200-day", [s.s20,s.s50,s.s200].map(m=>s.close>m?"above":"below").join(" / "))}
+        ${kv("50-day slope (20 sessions)", sgn(s.slope50,2,"%"))}${kv("Off 52-week high", fmt(s.offHigh,1)+"%")}${kv("Closes above 50-day, last 60", fmt(s.share60,0)+"%")}</table></div>
+      <div class="block"><h4>Relative strength inputs</h4><table>
+        ${kv("12-month vs benchmark", sgn(s.ex12,1," pts"))}${kv("6-month", sgn(s.ex6,1," pts"))}${kv("3-month", sgn(s.ex3,1," pts"))}${kv("RS acceleration", sgn(s.rsAccel,1," pts"))}
+        ${s.indPct!=null?kv("Industry rank / peer rank", fmt(s.indPct,0)+" / "+fmt(s.peerPct,0)):""}</table></div>
+      <div class="block"><h4>Momentum inputs</h4><table>
+        ${kv("1-month return", sgn(s.r1,1,"%"))}${kv("3-month return", sgn(s.r3,1,"%"))}${kv("Acceleration", sgn(s.accel,1," pts"))}${kv("RSI(14)", fmt(s.rsi,0))}${kv("Relative volume", fmt(s.rvol,2)+"×")}</table></div>
+      <div class="block"><h4>Levels</h4><table>
+        ${kv("55-day pivot", fmt(s.pivot,2))}${kv("20 / 50 / 200-day", [s.s20,s.s50,s.s200].map(x=>fmt(x,2)).join(" / "))}${kv("20-day low", fmt(s.low20,2))}${kv("ATR(14)", fmt(s.atr,2)+" ("+fmt(s.atrPct,1)+"%)")}${kv("Extension", fmt(s.ext,2)+" ATR")}
+        ${s.si!=null?kv("Short interest / days to cover", fmt(s.si,1)+"% / "+fmt(s.dtc,1)):""}</table></div>
+    </div>
+  </div>`;
+  $("#d-close").onclick = () => $("#dlg").close();
+  $("#dlg").showModal();
+  try{
+    if(!CHARTS){ const r = await fetch("data/composite/charts.json?v=" + encodeURIComponent(DATA.asOf)); if(!r.ok) throw 0; CHARTS = await r.json(); }
+    drawChart(s, CHARTS.c[s.sym]);
+  }catch(e){ $("#chart").innerHTML = '<div class="mute" style="padding:18px">Chart data unavailable.</div>'; }
+}
+function hitNote(s, id){
+  const n = s.note || {};
+  if(id === "bc" && n.bc) return ` Original pivot ${fmt(n.bc.pivot,2)}, broken ${n.bc.ago} sessions ago.`;
+  if(id === "pc" && n.pc) return ` Support low ${fmt(n.pc.support_low,2)}.`;
+  if(id === "lr" && n.lr) return ` Reclaim-day low ${fmt(n.lr.reclaim_low,2)}.`;
+  if((id === "ei" || id === "ed") && s.ev) return ` Gap of ${fmt(s.ev[1],1)}% ${s.ev[0]} session${s.ev[0]===1?"":"s"} ago on ${fmt(s.ev[4],1)}× volume; ${fmt(s.ev[2],0)}% retained; gap open ${fmt(s.ev[3],2)}.`;
+  if(id === "br" || id === "fb") return ` Pivot ${fmt(s.pivot,2)}.`;
+  if(id === "bdr") return ` 20-day low ${fmt(s.low20,2)}.`;
+  return "";
+}
+function drawChart(s, closes){
+  const box = $("#chart");
+  if(!closes || closes.length < 60){ box.innerHTML = '<div class="mute" style="padding:18px">No price series stored for this stock (charts are kept for scan matches and scores of 70+).</div>'; return; }
+  const N = Math.min(130, closes.length - 49), off = closes.length - N;
+  const c = closes.slice(off), ma = c.map((_, i) => {let t = 0; for(let k = 0; k < 50; k++) t += closes[off + i - k]; return t / 50;});
+  const showPivot = s.pivot != null && s.pivot < Math.max(...c) * 1.08;
+  const all = c.concat(ma, showPivot ? [s.pivot] : []), lo = Math.min(...all), hi = Math.max(...all), pad = (hi - lo) * .06 || 1;
+  const W = 920, H = 300, L = 8, R = 62, T = 10, B = 22, y0 = lo - pad, y1 = hi + pad;
+  const X = i => L + i * (W - L - R) / (N - 1), Y = v => T + (y1 - v) * (H - T - B) / (y1 - y0);
+  const path = a => a.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)).join("");
+  const step = niceStep((y1 - y0) / 4); let grid = "";
+  for(let v = Math.ceil(y0 / step) * step; v <= y1; v += step) grid += `<line x1="${L}" x2="${W-R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)" stroke-width="1"/><text x="${W-R+8}" y="${Y(v)+4}" fill="var(--ink-3)" font-size="11" font-family="var(--mono)">${fmt(v, step < 1 ? 2 : 0)}</text>`;
+  let xt = ""; for(const ago of [120, 90, 60, 30]) if(ago < N) xt += `<text x="${X(N-1-ago)}" y="${H-6}" fill="var(--ink-3)" font-size="11" font-family="var(--mono)" text-anchor="middle">−${ago}</text>`;
+  const piv = showPivot ? `<line x1="${L}" x2="${W-R}" y1="${Y(s.pivot)}" y2="${Y(s.pivot)}" stroke="var(--ink-2)" stroke-width="1" stroke-dasharray="4 3"/>` : "";
+  box.innerHTML = `<div class="legend"><span style="--c:var(--series-1)">Close</span><span style="--c:var(--series-2)">50-day average</span>${showPivot?'<span class="dash" style="--c:var(--ink-2)">55-day pivot '+fmt(s.pivot,2)+'</span>':""}<span style="--c:transparent;margin-left:auto">Last ${N} sessions · x-axis in sessions ago</span></div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(s.sym)} closing price, last ${N} sessions, with 50-day average">${grid}${xt}${piv}
+    <path d="${path(ma)}" fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round"/>
+    <path d="${path(c)}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="${X(N-1)}" cy="${Y(c[N-1])}" r="4" fill="var(--series-1)" stroke="var(--surface)" stroke-width="2"/>
+    <g id="xh" style="display:none"><line y1="${T}" y2="${H-B}" stroke="var(--line-2)" stroke-width="1"/><circle r="4" fill="var(--series-1)" stroke="var(--surface)" stroke-width="2"/></g>
+    <rect x="${L}" y="${T}" width="${W-L-R}" height="${H-T-B}" fill="transparent" id="hitbox"/></svg><div class="tip" id="tip"></div>`;
+  const svg = box.querySelector("svg"), xh = box.querySelector("#xh"), tip = box.querySelector("#tip");
+  const move = e => {
+    const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * W / r.width;
+    const i = Math.max(0, Math.min(N - 1, Math.round((px - L) / ((W - L - R) / (N - 1)))));
+    xh.style.display = ""; xh.querySelector("line").setAttribute("x1", X(i)); xh.querySelector("line").setAttribute("x2", X(i));
+    xh.querySelector("circle").setAttribute("cx", X(i)); xh.querySelector("circle").setAttribute("cy", Y(c[i]));
+    const ago = N - 1 - i;
+    tip.innerHTML = `${ago ? ago + " session" + (ago === 1 ? "" : "s") + " ago" : "Latest close"}<br>Close ${fmt(c[i],2)}<br>50-day ${fmt(ma[i],2)}`;
+    tip.style.display = "block";
+    const tx = X(i) * r.width / W + 14; tip.style.left = (tx + tip.offsetWidth > r.width ? tx - tip.offsetWidth - 28 : tx) + "px"; tip.style.top = "34px";
+  };
+  box.querySelector("#hitbox").addEventListener("pointermove", move);
+  box.querySelector("#hitbox").addEventListener("pointerleave", () => { xh.style.display = "none"; tip.style.display = "none"; });
+}
+function niceStep(raw){const p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;}
+
+/* ---------- wiring ---------- */
+function showTab(name){
+  document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", t.dataset.tab === name));
+  for(const p of ["stocks","groups","method","valid"]) $("#p-" + p).hidden = p !== name;
+}
+document.querySelector(".tabs").onclick = e => { const t = e.target.closest(".tab"); if(t) showTab(t.dataset.tab); };
+for(const id of ["q","minScore","minPrice","minDvol","industry","onlyNew"]) $("#" + id).addEventListener("input", () => { state.limit = 100; render(); });
+$("#sector").addEventListener("input", () => { fillIndustries(); state.limit = 100; render(); });
+$("#reset").onclick = () => { $("#q").value = ""; $("#minScore").value = 0; $("#minPrice").value = 5; $("#minDvol").value = 5; $("#sector").value = ""; fillIndustries(); $("#industry").value = ""; $("#onlyNew").checked = false; state.limit = 100; render(); };
+$("#more").onclick = () => { state.limit += 200; render(); };
+$("#tbl thead").onclick = e => { const th = e.target.closest("th"); if(!th) return; const k = th.dataset.k;
+  if(state.sort === k) state.dir *= -1; else { state.sort = k; state.dir = (k === "sym" || k === "ind") ? 1 : -1; } renderHead(); render(); };
+$("#tbl tbody").onclick = e => { const tr = e.target.closest("tr"); if(tr) openDetail(tr.dataset.sym); };
+$("#tbl tbody").onkeydown = e => { if(e.key === "Enter"){ const tr = e.target.closest("tr"); if(tr) openDetail(tr.dataset.sym); } };
+$("#dlg").addEventListener("click", e => { if(e.target === $("#dlg")) $("#dlg").close(); });
+$("#copy").onclick = async () => { const t = filtered().map(s => s.sym).join(","); try{ await navigator.clipboard.writeText(t); flash("#copy", "Copied"); }catch(e){ flash("#copy", "Blocked"); } };
+$("#csv").onclick = () => {
+  const cols = ["sym","name","sec","ind","close","chg","score","T","RS","M","rsAccel","rvol","ext","offHigh","pivot","s20","s50","s200"];
+  const q = v => v == null ? "" : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
+  const body = filtered().map(s => cols.map(c => q(s[c])).concat(q(s.scans.map(id => SCANS[id].name).join("; "))).join(",")).join("\n");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([cols.join(",") + ",scans\n" + body], {type: "text/csv"}));
+  a.download = `composite-${state.scan || "all"}-${DATA.asOf}.csv`; a.click(); URL.revokeObjectURL(a.href);
+};
+function flash(sel, txt){ const b = $(sel), o = b.textContent; b.textContent = txt; setTimeout(() => b.textContent = o, 1200); }
+load();
+</script>
+</body>
+</html>
