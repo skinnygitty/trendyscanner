@@ -21,6 +21,8 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import composite_scan as cs  # noqa: E402
 
+REAL_LOAD_UNIVERSE = cs.load_universe
+
 N_BARS = 502
 
 
@@ -121,13 +123,10 @@ def reference_scores(o, h, l, c, v, b):
     ex = {k: (sr(k).iloc[-1] - br(k).iloc[-1]) * 100 for k in (252, 126, 63)}
     RS = .45 * lin(ex[252], -30, 30) + .35 * lin(ex[126], -20, 20) + .20 * lin(ex[63], -12, 12)
     r1, r3 = sr(21).iloc[-1], sr(63).iloc[-1]
-    d = c_.iloc[-250:].diff().dropna()
-    up, dn = d.clip(lower=0), (-d).clip(lower=0)
-    au, ad = up.iloc[:14].mean(), dn.iloc[:14].mean()
-    for k in range(14, len(d)):
-        au = (au * 13 + up.iloc[k]) / 14; ad = (ad * 13 + dn.iloc[k]) / 14
-    rsi = 100 - 100 / (1 + au / ad)
-    q = 0 if rsi < 30 else (rsi - 30) * 4 if rsi < 55 else 100 if rsi <= 70 else 100 - (rsi - 70) * 3 if rsi < 90 else 40
+    d = c_.diff().iloc[-14:]                      # simple-average RSI: last 14 changes, no smoothing
+    gain, loss = d.clip(lower=0).sum(), (-d).clip(lower=0).sum()
+    rsi = 100 * gain / (gain + loss)
+    q = 0 if rsi < 30 else (rsi - 30) * 4 if rsi < 55 else 100 if rsi <= 70 else (80 - rsi) * 10 if rsi < 80 else 0
     rvol = v_.iloc[-1] / v_.iloc[-51:-1].mean()
     M = (.30 * lin(r1, -.12, .12) + .25 * lin(r3, -.20, .30) + .20 * lin((r1 - r3 / 3) * 100, -8, 8)
          + .15 * q + .10 * lin(rvol, .5, 2))
@@ -144,7 +143,12 @@ def run_tests(demo_dir=None):
     check(cs.scale(0, -30, 30) == 50, "zero excess return must map to 50")
     check(cs.scale(-99, -30, 30) == 0 and cs.scale(99, -30, 30) == 100, "scale clamps")
     check(cs.rsi_quality(60) == 100 and cs.rsi_quality(55) == 100 and cs.rsi_quality(70) == 100, "RSI 55-70 = 100")
-    check(cs.rsi_quality(20) == 0 and cs.rsi_quality(42.5) == 50 and cs.rsi_quality(95) == 40, "RSI tails")
+    check(cs.rsi_quality(20) == 0 and cs.rsi_quality(42.5) == 50, "RSI low tail")
+    check(cs.rsi_quality(75) == 50 and cs.rsi_quality(80) == 0 and cs.rsi_quality(95) == 0, "RSI fades to 0 at 80")
+    up14 = np.array([100.0] * 5 + [100 + k for k in range(1, 15)])          # 14 straight gains
+    check(cs.rsi_sma(up14) == 100 and cs.rsi_sma(up14[::-1].copy()) == 0, "simple-average RSI extremes")
+    mix = np.array([10, 11, 10, 12, 11, 13, 12, 14, 13, 15, 14, 16, 15, 17, 16.0])   # gains 13, losses 7
+    check(abs(cs.rsi_sma(mix) - 65.0) < 1e-9, "simple-average RSI value")
 
     bench, uni = synthetic_universe()
     stocks, n_checked, worst = {}, 0, 0.0
@@ -155,17 +159,19 @@ def run_tests(demo_dir=None):
         m.update(name=sym + " Corp", sec=d["sec"], ind=d["ind"], group=d["ind"])
         stocks[sym] = m
         if n_checked < 300:
-            T, RS, M = reference_scores(d["o"], d["h"], d["l"], d["c"], d["v"], bench)
+            T, RS, M = (float(np.floor(x + 0.5)) for x in reference_scores(d["o"], d["h"], d["l"], d["c"], d["v"], bench))
             err = max(abs(T - m["T"]), abs(RS - m["RS"]), abs(M - m["M"]))
             worst = max(worst, err); n_checked += 1
             check(err < 1e-6, f"{sym}: score mismatch vs reference ({err})")
-            check(m["score"] == int(round((T + RS + M) / 3)), f"{sym}: composite is not the simple average")
+            check(m["score"] == int(np.floor((T + RS + M) / 3 + 0.5)), f"{sym}: composite is not the simple average of the whole-number blocks")
             check(0 <= m["T"] <= 100 and 0 <= m["RS"] <= 100 and 0 <= m["M"] <= 100, "scores in 0-100")
     print(f"scores: {n_checked} stocks match the independent reference (max diff {worst:.2e})")
 
     # benchmark against itself must sit at RS = 50
     mb = cs.analyze(bench, bench * 1.005, bench * 0.995, bench, np.full(N_BARS, 1e6), bench)
-    check(abs(mb["RS"] - 50) < 1e-9, "benchmark vs itself should be RS 50")
+    check(mb["RS"] == 50, "benchmark vs itself should be RS 50")
+    for tt, t_, rs_, m_ in [(94, 98, 100, 85), (94, 99, 100, 84), (98, 98, 99, 96), (90, 96, 95, 78), (83, 82, 75, 93)]:
+        check(int(np.floor((t_ + rs_ + m_) / 3 + 0.5)) == tt, "composite rounding matches the reference rows")
 
     groups = cs.group_pass(stocks)
     rng = np.random.default_rng(3)
@@ -179,7 +185,7 @@ def run_tests(demo_dir=None):
         check(n < len(stocks) * 0.5, f"scan {sid} fires on over half the universe - rule too loose")
 
     # ---- re-check each hit against the literal rule with independent inputs
-    gmap = {s: g for g in groups for s in g["syms"]}
+    gname = {g["name"]: g for g in groups}
     for sym, m in stocks.items():
         d = uni[sym]; c, h, l, o, v = (pd.Series(d[k]) for k in "chlov")
         s20, s50, s200 = (c.rolling(k).mean() for k in (20, 50, 200))
@@ -232,7 +238,7 @@ def run_tests(demo_dir=None):
         if "sq" in sc:
             check(si[sym]["pct"] >= 8 and si[sym]["dtc"] >= 2.5 and m["M"] >= 60 and m["RS"] >= 55, f"{sym} sq")
             check(px > s20.iloc[-1] and px >= 0.92 * h.iloc[-21:].max() and m["rs_accel"] >= 0, f"{sym} sq price")
-        g = gmap.get(sym)
+        g = gname.get(m.get("group"))
         if "slg" in sc:
             check(m["RS"] >= 85 and m["T"] >= 70 and 25 <= g["pct"] < 75 and m["RS"] - g["rs"] >= 15
                   and m["peer_pct"] >= 85, f"{sym} slg")
@@ -241,6 +247,20 @@ def run_tests(demo_dir=None):
         if "gcl" in sc:
             check(g["pct"] >= 75 and m["peer_pct"] >= 70 and m["T"] >= 65 and m["RS"] >= 75 and px > s50.iloc[-1], f"{sym} gcl")
     print("scan rules: every hit re-verified against the literal rule")
+
+    # ---- group ranks measured on a core subset (the Russell 1000 in production)
+    import copy
+    st2 = copy.deepcopy({s: m for s, m in stocks.items()})
+    for m in st2.values():
+        m["scans"] = [x for x in m["scans"] if x not in ("slg", "grl", "gcl")]
+    core = {s for k, s in enumerate(sorted(st2)) if k % 5 < 3}
+    g2 = cs.group_pass(st2, core)
+    check(all(set(g["syms"]) <= core for g in g2), "group members must come from the core only")
+    check(sum(g["n"] for g in g2) <= len(core), "group sizes bounded by the core")
+    outside = [m for s, m in st2.items() if s not in core]
+    check(all("peer_pct" in m and 0 <= m["peer_pct"] <= 100 for m in outside), "non-core stocks ranked against core peers")
+    check(any("gcl" in m["scans"] for m in outside), "non-core stocks can still earn group tags")
+    print("group ranks on a core subset: ok")
 
     # ---- guards
     short = {k: uni[next(iter(uni))][k][:200] for k in "ohlcv"}
@@ -273,10 +293,14 @@ def run_tests(demo_dir=None):
         return {"dates": days[sl], **{k: d[k][sl] for k in "ohlcv"}}
 
     bench_bars = {"o": bench, "h": bench * 1.004, "l": bench * 0.996, "c": bench, "v": np.full(N_BARS, 3e6)}
-    universe = [{"s": s, "n": s.title() + " Holdings", "sec": d["sec"], "ind": d["ind"], "idx": ["R1000"]}
-                for s, d in uni.items()]
+    universe = [{"s": s, "n": s.title() + " Holdings", "sec": d["sec"], "ind": d["ind"],
+                 "idx": ["R1000"] if k % 5 < 3 else ["SP600"]}
+                for k, (s, d) in enumerate(uni.items())]
     cs.load_universe = lambda *_a, **_k: universe
-    cs.fetch_short_interest = lambda s: {"pct": round(si[s]["pct"], 2), "dtc": round(si[s]["dtc"], 2)} if s in si else None
+    cs.CFG["profile_max_lookups"] = 5000
+    cs.fetch_profile = lambda s: {"ind": "Y " + uni[s]["ind"], "mcap": 5e9 + 1e7 * len(s),
+                                  "pct": round(si[s]["pct"], 2) if s in si else None,
+                                  "dtc": round(si[s]["dtc"], 2) if s in si else None}
     orig_sleep, cs.time.sleep = cs.time.sleep, lambda *_: None
 
     # day 1: as of 30 sessions ago; day 2: latest. Then validation must see a matured 21-session window.
@@ -298,6 +322,52 @@ def run_tests(demo_dir=None):
     check(v21["days"] == 1 and v21["buckets"]["80-100"]["n"] > 0, "21-session outcomes matured")
     check(j["validation"]["horizons"]["63"]["days"] == 0, "63-session outcomes must not be reported early")
     check(os.path.exists(os.path.join(out, "charts.json")), "charts.json written")
+    check(j["industrySource"] == "yahoo" and j["rows"][0][ci["ind"]].startswith("Y "), "Yahoo industries used once covered")
+    n_core = sum(r[ci["r1k"]] for r in j["rows"])
+    check(n_core == j["coreScored"] and 1000 < n_core < 1300, "Russell 1000 flag on rows")
+    check(any(r[ci["mcapB"]] for r in j["rows"]), "market cap column")
+    with open(os.path.join(out, "diag.json")) as f:
+        dj = json.load(f)
+    check(len(dj["rows"]) == j["scored"] and "rsi_sma" in dj["cols"] and "tr5_20" in dj["cols"], "diag.json written")
+    orig_sleep, cs.time.sleep = cs.time.sleep, lambda *_: None
+    check(cs.run(out, force=True) == 0, "forced re-run failed")
+    cs.time.sleep = orig_sleep
+    with open(os.path.join(out, "latest.json")) as f:
+        j2 = json.load(f)
+    check(all(r[ci["dScore"]] is None for r in j2["rows"]), "forced same-day re-run must not show day-over-day deltas")
+    check(j2["validation"]["snapshots"] == 2, "forced re-run overwrites the snapshot, not adds one")
+
+    # universe loader: Russell 1000 comes from iShares, cache without it is rebuilt, outage keeps old membership
+    import datetime as dt
+    udir = tempfile.mkdtemp()
+    ish = "Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange\n" + \
+          "".join(f'"R{chr(65+k%26)}{chr(65+k//26%26)}{chr(65+k//676)}","CO {k}","Financials","Equity","1","1","1","1","9","US","NYSE"\n' for k in range(1000)) + \
+          '"ZZZZ","GONE CO","Health Care","Equity","1","0","1","1","0.01","US","NO MARKET (E.G. UNLISTED)"\n'
+    def table(n, tag):
+        return "<table><tr><th>Symbol</th><th>Security</th><th>GICS Sector</th><th>GICS Sub-Industry</th></tr>" + \
+               "".join(f"<tr><td>{tag}{chr(65+k%26)}{chr(65+k//26)}</td><td>Co</td><td>Tech</td><td>Software</td></tr>" for k in range(n)) + "</table>"
+    state = {"ishares_up": True}
+    def fake_get(url, *a, **k):
+        if "wikipedia" in url:
+            return table(600, "S") if "600" in url else table(500, "F") if "500" in url else table(400, "M")
+        if "russell-1000" in url and state["ishares_up"]:
+            return ish
+        raise RuntimeError("down")
+    cs.http_get = fake_get
+    with open(os.path.join(udir, "universe.json"), "w") as f:       # fresh cache that lacks the Russell 1000
+        json.dump({"built": dt.date.today().isoformat(), "stocks": [{"s": "AAA", "n": None, "sec": None, "ind": None, "idx": ["SP500"]}] * 1200}, f)
+    u1 = REAL_LOAD_UNIVERSE(udir)
+    check(cs._has(u1, "R1000") == 1000 and not any(x["s"] == "ZZZZ" for x in u1), "Russell 1000 from iShares, unlisted rows dropped")
+    check(len(u1) == 2500, "all four lists merged")
+    state["ishares_up"] = False
+    with open(os.path.join(udir, "universe.json")) as f:
+        old = json.load(f)
+    old["built"] = "2026-01-01"
+    with open(os.path.join(udir, "universe.json"), "w") as f:
+        json.dump(old, f)
+    u2 = REAL_LOAD_UNIVERSE(udir)
+    check(cs._has(u2, "R1000") == 1000, "outage keeps the last known Russell 1000 membership")
+    print("universe loader: ok")
     print(f"pipeline: ok ({j['scored']} scored, latest.json {os.path.getsize(os.path.join(out, 'latest.json')) // 1024} KB)")
     print("ALL TESTS PASSED")
 

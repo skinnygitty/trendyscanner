@@ -224,6 +224,7 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
       <div class="cards" id="library"></div>
     </div>
     <div class="filters">
+      <div class="f" id="uniF"><label for="uni">Universe</label><select id="uni"><option value="r1k">Russell 1000</option><option value="all">All (adds S&amp;P 400 + 600)</option></select></div>
       <div class="f"><label for="q">Ticker / name</label><input id="q" type="search" placeholder="NVDA" autocomplete="off"></div>
       <div class="f"><label for="minPrice">Min price $</label><input id="minPrice" type="number" min="0" step="1" value="5"></div>
       <div class="f"><label for="minDvol">Min $ vol (M/day)</label><input id="minDvol" type="number" min="0" step="5" value="5"></div>
@@ -243,13 +244,14 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
   </section>
 
   <section class="panel" id="p-groups" hidden>
-    <p class="rule">Industries ranked by the median relative-strength score of their members (groups with fewer than 4 scored stocks are left out). Click a row to see its stocks.</p>
+    <p class="rule">Industries ranked by the median relative-strength score of their Russell 1000 members (groups with fewer than 4 are left out). Click a row to see its stocks.</p>
     <div class="tablebox"><table id="gtbl"><thead></thead><tbody></tbody></table></div>
   </section>
 
   <section class="panel prose" id="p-method" hidden>
     <h3>The composite</h3>
     <div class="formula">Score = ( Trend + Relative strength + Momentum ) ÷ 3, rounded</div>
+    <p>Each block is first rounded to a whole number; the composite is the rounded average of those three whole numbers.</p>
     <p><b>It describes condition, not odds.</b> A 90 means trend, relative strength and momentum are all strongly aligned right now. It does not mean a 90% chance of going up. A scan match is still what says whether a complete setup or trigger exists.</p>
     <div class="blocks">
       <div class="block"><h4>Trend</h4><table>
@@ -267,18 +269,21 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
         <tr><td>1-month return, −12% → +12%</td><td>30%</td></tr>
         <tr><td>3-month return, −20% → +30%</td><td>25%</td></tr>
         <tr><td>1-month return vs a third of the 3-month, −8 → +8 pts</td><td>20%</td></tr>
-        <tr><td>RSI(14) quality, best between 55 and 70</td><td>15%</td></tr>
+        <tr><td>RSI(14) quality: full marks from 55 to 70, fading to zero at 80 and at 30</td><td>15%</td></tr>
         <tr><td>Relative volume, 0.5× → 2×</td><td>10%</td></tr></table></div>
     </div>
     <h3>Data and exclusions</h3>
     <ul>
-      <li>Universe: Russell 1000, S&amp;P 400 and S&amp;P 600 members. Benchmark: <span class="mono" id="benchName">IWB</span> (Russell 1000 ETF, dividends included).</li>
-      <li>Bars are daily, adjusted for splits and dividends, from Yahoo Finance. Short interest is exchange-reported twice a month, so it lags.</li>
+      <li>Universe: the Russell 1000 (members taken from the iShares Russell 1000 ETF's daily holdings), with S&amp;P 400 and S&amp;P 600 members available through the Universe selector. Benchmark: <span class="mono" id="benchName">IWB</span>, the same ETF.</li>
+      <li>Bars are daily from Yahoo Finance, adjusted for splits but not for dividends, for stocks and benchmark alike.</li>
+      <li>Industry, market cap and short interest come from Yahoo Finance profiles and are refreshed on a rolling basis. Short interest is exchange-reported twice a month, so it lags.</li>
+      <li>Industry ranks and peer ranks are measured on Russell 1000 members only, whichever universe is shown.</li>
       <li>A stock is left unscored when it has under 260 sessions of history, has no bar for the latest session, or shows a one-day jump that looks like a bad adjustment.</li>
     </ul>
     <h3>Where this page fills in the blanks</h3>
     <p>The scoring weights and scan thresholds follow the published rules. Several terms in those rules have no published definition, so this scanner uses its own. They are settings at the top of <span class="mono">scripts/composite_scan.py</span> and easy to change:</p>
     <ul>
+      <li><b>RSI</b>: the simple-average form (sum of gains ÷ sum of gains and losses over the last 14 sessions), not Wilder's smoothed version. Checked against published scores; the fade below 55 is not yet verified.</li>
       <li><b>Rising average</b>: the 50-day is higher than 10 sessions ago; the 200-day higher than 20 sessions ago.</li>
       <li><b>ATR extension</b>: distance above the 20-day average, in 14-day ATRs.</li>
       <li><b>RS acceleration</b>: 3-month excess return minus half the 6-month excess return.</li>
@@ -287,7 +292,7 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
       <li><b>Prior 6-month leadership</b>: at least 10 points ahead of the benchmark over 6 months, with a 52-week high in the last 63 sessions.</li>
       <li><b>Near an average</b>: from 0.5 ATR below to 1 ATR above it. <b>Strong close</b>: top 35% of the day's range. <b>Weak close</b>: bottom 35%.</li>
       <li><b>Gap retained</b>: today's close relative to the gap open, measured from the pre-gap close.</li>
-      <li><b>Industry rank</b>: percentile of the industry's median RS score among all industries. <b>Peer rank</b>: the stock's RS percentile inside its industry.</li>
+      <li><b>Industry rank</b>: percentile of the industry's median RS score among all industries. <b>Peer rank</b>: the stock's RS percentile inside its industry, ties broken by unclipped relative strength.</li>
     </ul>
     <div class="note">Because of those choices, matches here will not be identical to any other scanner built on the same published rules. Treat the lists as a starting point for chart review.</div>
   </section>
@@ -326,8 +331,8 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const fmt = (x, d = 1) => x == null ? "—" : Number(x).toLocaleString("en-US", {minimumFractionDigits: d, maximumFractionDigits: d});
 const sgn = (x, d = 1, suf = "") => x == null ? '<span class="mute">—</span>' : `<span class="${x > 0 ? "up" : x < 0 ? "down" : "mute"}">${x > 0 ? "+" : x < 0 ? "−" : ""}${fmt(Math.abs(x), d)}${suf}</span>`;
 
-let DATA = null, STOCKS = [], SCANS = {}, CHARTS = null;
-const state = {scan: "", sort: "score", dir: -1, limit: 100, min: {score: 0, T: 0, RS: 0, M: 0}};
+let DATA = null, ALL = [], STOCKS = [], SCANS = {}, CHARTS = null, HAS_CORE = false;
+const state = {scan: "", sort: "score", dir: -1, limit: 100, uni: "all", min: {score: 0, T: 0, RS: 0, M: 0}};
 
 const COLDEFS = [
   {k:"sym", h:"Ticker", l:1, html:s=>`${esc(s.sym)}<span class="nm">${esc(s.name||"")}</span>`, cls:"sym"},
@@ -343,6 +348,7 @@ const COLDEFS = [
   {k:"rvol", h:"RVol", html:s=>s.rvol==null?"—":fmt(s.rvol,2)+"×", title:"Today's volume ÷ 50-day average"},
   {k:"ext", h:"Ext ATR", html:s=>fmt(s.ext,2), title:"ATRs above (+) or below (−) the 20-day average"},
   {k:"offHigh", h:"Off high", html:s=>s.offHigh==null?"—":fmt(s.offHigh,1)+"%", title:"Distance from the 52-week high"},
+  {k:"mcapB", h:"Mkt cap", html:s=>s.mcapB==null?'<span class="mute">—</span>':"$"+fmt(s.mcapB, s.mcapB>=100?0:s.mcapB>=10?1:2)+"B", title:"Market capitalisation"},
   {k:"nScans", h:"Playbook", l:1, cls:"scans", html:s=>rowTags(s), title:"Scans this stock matches today. Sorts by number of matches."}
 ];
 function meter(v){return `<span class="meter"><span>${fmt(v,0)}</span><i style="--w:${Math.max(0,Math.min(100,v))}%"></i></span>`}
@@ -372,13 +378,23 @@ async function load(){
     return;
   }
   const ci = DATA.cols;
-  STOCKS = DATA.rows.map(r => {const o = {}; ci.forEach((c, i) => o[c] = r[i]); o.nScans = o.scans.length; o.newScans = o.newScans || []; return o;});
+  ALL = DATA.rows.map(r => {const o = {}; ci.forEach((c, i) => o[c] = r[i]); o.nScans = o.scans.length; o.newScans = o.newScans || []; return o;});
+  HAS_CORE = ALL.some(s => s.r1k) && !ALL.every(s => s.r1k);
+  if(!ALL.some(s => s.mcapB != null)) COLDEFS.splice(COLDEFS.findIndex(c => c.k === "mcapB"), 1);
   DATA.scans.forEach(s => SCANS[s.id] = Object.assign({}, s, SCAN_INFO[s.id]));
   const h = new URLSearchParams(location.hash.slice(1));
   if(SCANS[h.get("scan")]) state.scan = h.get("scan");
   for(const [k] of GATES){ const v = parseInt(h.get(k.toLowerCase()), 10); if(v > 0 && v <= 100) state.min[k] = v; }
-  renderStatus(); renderGates(); renderLibrary(); fillSelects(); renderHead(); render(); renderGroups(); renderValidation();
+  /* Default to the Russell 1000, the universe the scoring model was built on; the wider list is one click away. */
+  state.uni = HAS_CORE && h.get("u") !== "all" ? "r1k" : "all";
+  $("#uniF").style.display = HAS_CORE ? "" : "none"; $("#uni").value = state.uni;
+  renderGates(); renderHead(); applyUniverse(); renderGroups(); renderValidation();
   $("#benchName").textContent = DATA.benchmark;
+}
+
+function applyUniverse(){
+  STOCKS = state.uni === "r1k" ? ALL.filter(s => s.r1k) : ALL;
+  renderStatus(); renderLibrary(); fillSelects(); render();
 }
 
 function renderStatus(){
@@ -390,7 +406,8 @@ function renderStatus(){
     `<span>Updated <b>${gen.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</b></span>` +
     `<span>vs <b>${esc(DATA.benchmark)}</b></span>`;
   const trig = STOCKS.filter(s => s.scans.some(id => SCANS[id].stage === "Trigger")).length;
-  const tiles = [["Scored", DATA.scored.toLocaleString() , `of ${DATA.universe.toLocaleString()}`], ["Score ≥ 80", STOCKS.filter(s=>s.score>=80).length, ""],
+  const total = state.uni === "r1k" ? DATA.coreUniverse : DATA.universe;
+  const tiles = [[state.uni === "r1k" ? "Russell 1000 scored" : "Scored", STOCKS.length.toLocaleString(), `of ${total.toLocaleString()}`], ["Score ≥ 85", STOCKS.filter(s=>s.score>=85).length, ""],
                  ["With a trigger", trig, ""], ["Median score", Math.round(median(STOCKS.map(s=>s.score))), ""]];
   $("#tiles").innerHTML = tiles.map(t => `<div class="tile"><div class="k">${t[0]}</div><div class="v">${t[1]}${t[2]?` <span class="mute" style="font-size:12px;white-space:nowrap">${t[2]}</span>`:""}</div></div>`).join("");
 }
@@ -399,6 +416,7 @@ function median(a){if(!a.length)return "—";const s=[...a].sort((x,y)=>x-y),m=s
 function syncHash(){
   const p = new URLSearchParams();
   if(state.scan) p.set("scan", state.scan);
+  if(HAS_CORE && state.uni === "all") p.set("u", "all");
   for(const [k] of GATES) if(state.min[k]) p.set(k.toLowerCase(), state.min[k]);
   const h = p.toString();
   history.replaceState(null, "", h ? "#" + h : location.pathname + location.search);
@@ -435,10 +453,10 @@ function updateGates(rows){
 
 function renderLibrary(){
   $("#allCt").textContent = STOCKS.length.toLocaleString();
-  $("#library").innerHTML = DATA.scans.map(s => `<button class="card" data-scan="${s.id}" aria-pressed="${state.scan===s.id}">
+  $("#library").innerHTML = DATA.scans.map(s => { const n = STOCKS.filter(x => x.scans.includes(s.id)).length; return `<button class="card" data-scan="${s.id}" aria-pressed="${state.scan===s.id}">
       <div class="tags">${scanTags(s)}</div>
-      <div class="nm"><span>${esc(s.name)}</span><span class="ct${s.count?"":" zero"}">${s.count}</span></div>
-      <div class="ds">${esc(SCAN_INFO[s.id].j)}</div></button>`).join("");
+      <div class="nm"><span>${esc(s.name)}</span><span class="ct${n?"":" zero"}">${n}</span></div>
+      <div class="ds">${esc(SCAN_INFO[s.id].j)}</div></button>`; }).join("");
   $("#library").onclick = e => {
     const c = e.target.closest(".card"); if(!c) return;
     setScan(state.scan === c.dataset.scan ? "" : c.dataset.scan);
@@ -521,7 +539,7 @@ function renderGroups(){
   $("#gtbl tbody").onclick = e => {
     const tr = e.target.closest("tr[data-ind]"); if(!tr) return;
     $("#sector").value = ""; fillIndustries(); $("#industry").value = tr.dataset.ind;
-    if(!$("#industry").value){ const s = STOCKS.find(x => (x.ind || x.sec) === tr.dataset.ind); if(s){ $("#sector").value = s.sec || ""; fillIndustries(); } }
+    if(!$("#industry").value){ const s = ALL.find(x => (x.ind || x.sec) === tr.dataset.ind); if(s){ $("#sector").value = s.sec || ""; fillIndustries(); } }
     showTab("stocks"); setScan("");
   };
 }
@@ -545,12 +563,12 @@ function renderValidation(){
 
 /* ---------- detail ---------- */
 async function openDetail(sym){
-  const s = STOCKS.find(x => x.sym === sym); if(!s) return;
+  const s = ALL.find(x => x.sym === sym); if(!s) return;
   const hits = s.scans.map(id => {const sc = SCANS[id]; return `<div class="hit"><div class="t">${esc(sc.name)} ${modeChips(sc.mode)}<span class="chip">${esc(sc.stage)}</span>${s.newScans.includes(id)?'<span class="chip new">New today</span>':""}</div><p>${esc(sc.j)}${hitNote(s,id)}</p></div>`}).join("")
     || '<p class="mute">No scan matches today. The score describes condition only.</p>';
   const kv = (k, v) => `<tr><td>${k}</td><td class="mono">${v}</td></tr>`;
   $("#dlg-body").innerHTML = `
-  <div class="dh"><div><h3 id="d-sym">${esc(s.sym)}</h3><div class="sub">${esc(s.name||"")} · ${esc(s.ind||s.sec||"")}</div></div>
+  <div class="dh"><div><h3 id="d-sym">${esc(s.sym)}</h3><div class="sub">${esc(s.name||"")} · ${esc(s.ind||s.sec||"")}${s.mcapB!=null?" · $"+fmt(s.mcapB, s.mcapB>=10?1:2)+"B":""}</div></div>
     <div><div class="px">${fmt(s.close,2)} ${sgn(s.chg,2,"%")}</div><div style="text-align:right;margin-top:6px"><a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(s.sym.replace("-","."))}" target="_blank" rel="noopener">Open chart ↗</a> &nbsp; <button class="btn" id="d-close">Close</button></div></div></div>
   <div class="db">
     <div class="dgrid">${[["Composite",s.score],["Trend",fmt(s.T,0)],["Rel. strength",fmt(s.RS,0)],["Momentum",fmt(s.M,0)]].map(t=>`<div class="tile"><div class="k">${t[0]}</div><div class="v">${t[1]}</div></div>`).join("")}</div>
@@ -632,6 +650,7 @@ function showTab(name){
 document.querySelector(".tabs").onclick = e => { const t = e.target.closest(".tab"); if(t) showTab(t.dataset.tab); };
 for(const id of ["q","minPrice","minDvol","industry","onlyNew"]) $("#" + id).addEventListener("input", () => { state.limit = 100; render(); });
 $("#sector").addEventListener("input", () => { fillIndustries(); state.limit = 100; render(); });
+$("#uni").addEventListener("input", () => { state.uni = $("#uni").value; state.limit = 100; syncHash(); applyUniverse(); });
 $("#reset").onclick = () => { for(const [k] of GATES) state.min[k] = 0; syncHash(); $("#q").value = ""; $("#minPrice").value = 5; $("#minDvol").value = 5; $("#sector").value = ""; fillIndustries(); $("#industry").value = ""; $("#onlyNew").checked = false; state.limit = 100; render(); };
 $("#more").onclick = () => { state.limit += 200; render(); };
 $("#tbl thead").onclick = e => { const th = e.target.closest("th"); if(!th) return; const k = th.dataset.k;
@@ -641,7 +660,7 @@ $("#tbl tbody").onkeydown = e => { if(e.key === "Enter"){ const tr = e.target.cl
 $("#dlg").addEventListener("click", e => { if(e.target === $("#dlg")) $("#dlg").close(); });
 $("#copy").onclick = async () => { const t = filtered().map(s => s.sym).join(","); try{ await navigator.clipboard.writeText(t); flash("#copy", "Copied"); }catch(e){ flash("#copy", "Blocked"); } };
 $("#csv").onclick = () => {
-  const cols = ["sym","name","sec","ind","close","chg","score","T","RS","M","rsAccel","rvol","ext","offHigh","pivot","s20","s50","s200"];
+  const cols = ["sym","name","sec","ind","close","chg","score","T","RS","M","rsAccel","rvol","ext","offHigh","pivot","s20","s50","s200","mcapB"];
   const q = v => v == null ? "" : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
   const body = filtered().map(s => cols.map(c => q(s[c])).concat(q(s.scans.map(id => SCANS[id].name).join("; "))).join(",")).join("\n");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([cols.join(",") + ",scans\n" + body], {type: "text/csv"}));

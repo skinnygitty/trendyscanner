@@ -8,9 +8,9 @@ score, then runs 16 rule-based scans. Results are written as static JSON
 that composite.html reads, so the whole thing can live on GitHub Pages.
 
 Data (all free, no API keys):
-  * Universe + industries : Wikipedia index tables, iShares holdings as fallback
-  * Daily bars            : Yahoo Finance (split/dividend adjusted)
-  * Short interest        : Yahoo Finance (twice-monthly exchange data, cached)
+  * Universe  : iShares Russell 1000 ETF holdings; Wikipedia S&P 500/400/600 tables
+  * Daily bars: Yahoo Finance (split-adjusted; dividends NOT added back)
+  * Profiles  : Yahoo Finance industry, market cap, short interest (cached)
 
 Run:  python scripts/composite_scan.py [--force] [--limit N]
 
@@ -47,6 +47,12 @@ CFG = {
     "ext_base": 20,                # ATR extension is measured from this average
     "atr_len": 14,
     "rsi_len": 14,
+    # Calibrated against the original scanner on the 2026-10-02 close:
+    "rsi_method": "sma",           # simple-average RSI over the last 14 changes ("wilder" = classic)
+    "rsi_zero_high": 80,           # RSI quality: 100 from 55 to 70, fading to 0 at 80 ...
+    "rsi_zero_low": 30,            # ... and to 0 at 30 (low side not yet verified)
+    "integer_scores": True,        # round Trend / RS / Momentum first, then average
+    "dividend_adjusted": False,    # returns exclude dividends for stocks and benchmark alike
     # --- shared scan terms ---
     "rising50_lookback": 10,
     "rising200_lookback": 20,
@@ -72,9 +78,12 @@ CFG = {
     "event_vol": 1.5,
     "min_group_size": 4,
     "group_stable_accel": -2.0,
-    # --- short interest ---
-    "si_max_lookups": 250,
-    "si_ttl_days": 10,
+    # --- universe / profiles ---
+    "core_index": "R1000",         # index whose members define industry groups and peer ranks
+    "profile_max_lookups": 1200,   # Yahoo profile lookups per night (industry, market cap, short interest)
+    "profile_ttl_days": 45,
+    "si_ttl_days": 10,             # short interest refresh for Squeeze Radar candidates
+    "yahoo_industry_min_cover": 0.90,
     # --- safety ---
     "max_day_up": 2.0,             # +200% / -70% in one session = treat as bad data
     "max_day_down": -0.70,
@@ -164,19 +173,25 @@ def rsi_last(c: np.ndarray, n: int = 14) -> float:
     return 100.0 - 100.0 / (1.0 + au / ad)
 
 
+def rsi_sma(c: np.ndarray, n: int = 14) -> float:
+    """RSI from plain sums of the last n gains and losses (no Wilder smoothing)."""
+    d = np.diff(c[-(n + 1):])
+    if len(d) < n:
+        return float("nan")
+    up, dn = float(d[d > 0].sum()), float(-d[d < 0].sum())
+    return 50.0 if up + dn == 0 else 100.0 * up / (up + dn)
+
+
 def rsi_quality(r: float) -> float:
-    """100 inside the healthy 55-70 zone, fading on both sides."""
+    """100 inside the healthy 55-70 zone, fading linearly to 0 on both sides."""
     if not math.isfinite(r):
         return 0.0
-    if r < 30:
-        return 0.0
+    lo, hi = CFG["rsi_zero_low"], CFG["rsi_zero_high"]
     if r < 55:
-        return (r - 30) / 25 * 100
+        return max(0.0, (r - lo) / (55 - lo) * 100)
     if r <= 70:
         return 100.0
-    if r < 90:
-        return 100 - (r - 70) / 20 * 60
-    return 40.0
+    return max(0.0, (hi - r) / (hi - 70) * 100)
 
 
 # --------------------------------------------------------------------------
@@ -231,11 +246,14 @@ def analyze(o, h, l, c, v, b) -> Optional[dict]:
     RS = (0.45 * scale(ex12, -30, 30) + 0.35 * scale(ex6, -20, 20)
           + 0.20 * scale(ex3, -12, 12))
     rs_accel = ex3 - ex6 / 2          # 3-month excess vs the 6-month pace
+    rs_raw = 0.45 * ex12 / 60 + 0.35 * ex6 / 40 + 0.20 * ex3 / 24      # same weights, not clipped
 
     # ---------------- Momentum ----------------
     r1, r3, r6 = ret(21), ret(63), ret(126)
     accel = (r1 - r3 / 3) * 100
-    rsi = rsi_last(c[-250:], CFG["rsi_len"])
+    rsi_w = rsi_last(c[-250:], CFG["rsi_len"])
+    rsi_s = rsi_sma(c, CFG["rsi_len"])
+    rsi = rsi_s if CFG["rsi_method"] == "sma" else rsi_w
     w = CFG["rvol_window"]
     avg_vol = float(np.mean(v[i - w: i]))
     rvol = v[i] / avg_vol if avg_vol > 0 else float("nan")
@@ -243,7 +261,11 @@ def analyze(o, h, l, c, v, b) -> Optional[dict]:
          + 0.20 * scale(accel, -8, 8) + 0.15 * rsi_quality(rsi)
          + 0.10 * scale(rvol, 0.5, 2.0))
 
-    score = int(round((T + RS + M) / 3))
+    if CFG["integer_scores"]:
+        # The three blocks are whole numbers and the composite averages those
+        # whole numbers (98, 100, 85 -> 94), which is what the original shows.
+        T, RS, M = (float(math.floor(x + 0.5)) for x in (T, RS, M))
+    score = int(math.floor((T + RS + M) / 3 + 0.5))
 
     # ---------------- Shared scan inputs ----------------
     base = {20: s20, 50: s50}[CFG["ext_base"]]
@@ -388,7 +410,50 @@ def analyze(o, h, l, c, v, b) -> Optional[dict]:
     squeeze_px = (M >= 60 and RS >= 55 and px > s20[i]
                   and px >= hi20 * 0.92 and rs_accel >= 0)
 
+    # ---- Diagnostics: other plausible readings of the undefined terms.
+    # Not used by any scan; written to diag.json so thresholds can be
+    # calibrated against a reference list without re-fetching prices.
+    def mr(a, k, end=i):               # mean of the k values ending at `end`
+        return float(np.mean(a[end - k + 1: end + 1]))
+
+    def div(a, b_):
+        return a / b_ if b_ and math.isfinite(b_) and b_ != 0 else float("nan")
+
+    def rs_score_at(j):
+        if j - 252 < 0:
+            return float("nan")
+
+        def e(k):
+            return ((c[j] / c[j - k] - 1) - (b[j] / b[j - k] - 1)) * 100
+        return 0.45 * scale(e(252), -30, 30) + 0.35 * scale(e(126), -20, 20) + 0.20 * scale(e(63), -12, 12)
+
+    hl = h - l
+    brk = [k for k in range(0, 16) if broke(i - k)]
+    diag = {
+        "tr5_20": div(mr(tr, 5), mr(tr, 20)), "tr5_20p": div(mr(tr, 5), mr(tr, 20, i - 5)),
+        "tr10_30p": rng_ratio, "tr10_50": div(mr(tr, 10), mr(tr, 50)),
+        "hl5_20": div(mr(hl, 5), mr(hl, 20)), "hl10_50": div(mr(hl, 10), mr(hl, 50)),
+        "v5_20": div(mr(v, 5), mr(v, 20)), "v5_20p": div(mr(v, 5), mr(v, 20, i - 5)),
+        "v10_30p": vol_ratio, "v10_50": div(mr(v, 10), mr(v, 50)), "v5_50": div(mr(v, 5), mr(v, 50)),
+        "rvol20": div(v[i], mr(v, 20, i - 1)), "rvol50": rvol,
+        "rvol20i": div(v[i], mr(v, 20)), "rvol50i": div(v[i], mr(v, 50)),
+        "rsi_sma": rsi_s, "rsi_wilder": rsi_w,
+        "to_pivot": to_pivot * 100, "pivot_age": P - int(np.argmax(h[i - P: i])),
+        "bo_ago": brk[0] if brk else None,
+        "low20_dist": (px / low20 - 1) * 100, "low20i_dist": (px / float(np.min(l[i - 19: i + 1])) - 1) * 100,
+        "low50_dist": (px / low50 - 1) * 100,
+        "rsacc_6": rs_accel, "rsacc_12": ex3 - ex12 / 4,
+        "rs_d21": RS - rs_score_at(i - 21), "rs_d63": RS - rs_score_at(i - 63),
+        "s50_d10": (s50[i] / s50[i - 10] - 1) * 100, "s50_d20": slope50 * 100,
+        "s200_d20": (s200[i] / s200[i - 20] - 1) * 100,
+        "ext20": ext, "ext50": (px - s50[i]) / atr,
+        "depth_atr": depth_close, "depth_low_atr": depth_low, "clv": clv, "tr_atr": tr_atr,
+        "chg": chg * 100, "hi_ago": 251 - hi_pos, "below50_10": below_cnt,
+        "gt_prev_high": int(px > h[i - 1]), "rising200": int(rising200), "rising50": int(rising50),
+    }
+
     return {
+        "diag": diag,
         "score": score, "T": T, "RS": RS, "M": M,
         "close": px, "chg": chg, "rs_accel": rs_accel, "rvol": rvol, "ext": ext,
         "off_high": off_high, "atr": atr, "atr_pct": atr / px,
@@ -396,7 +461,7 @@ def analyze(o, h, l, c, v, b) -> Optional[dict]:
         "s20": s20[i], "s50": s50[i], "s200": s200[i],
         "pivot": piv, "low20": low20, "low50": low50, "hi52": hi52,
         "rsi": rsi, "r1": r1, "r3": r3, "r6": r6,
-        "ex12": ex12, "ex6": ex6, "ex3": ex3,
+        "ex12": ex12, "ex6": ex6, "ex3": ex3, "rs_raw": rs_raw,
         "slope50": slope50, "share60": share60, "accel": accel,
         "above50": bool(px > s50[i]), "squeeze_px": bool(squeeze_px),
         "ev": ev, "scans": scans, "note": note,
@@ -406,21 +471,54 @@ def analyze(o, h, l, c, v, b) -> Optional[dict]:
 # --------------------------------------------------------------------------
 # Group (industry) pass
 # --------------------------------------------------------------------------
-def pct_rank(values: List[float]) -> List[float]:
-    """Percentile rank 0-100 of each value within the list (100 = highest)."""
+def pct_rank(values: list) -> List[float]:
+    """Percentile rank 0-100 of each value within the list (100 = highest).
+    Values may be tuples, compared left to right, so ties can be broken."""
     n = len(values)
     if n == 1:
         return [50.0]
-    order = np.argsort(np.argsort(np.asarray(values, dtype=float), kind="stable"), kind="stable")
-    return [float(r) / (n - 1) * 100 for r in order]
+    out = [0.0] * n
+    for rank, k in enumerate(sorted(range(n), key=lambda k: values[k])):
+        out[k] = rank / (n - 1) * 100
+    return out
 
 
-def group_pass(stocks: Dict[str, dict]) -> List[dict]:
+def _peer_key(m: dict) -> tuple:
+    # The RS score saturates at 100 for the strongest names; the unclipped
+    # version separates them so "top 15% of peers" is not decided by a tie.
+    return (m["RS"], m.get("rs_raw", 0.0))
+
+
+def _group_rules(m: dict, g: dict, pp: float) -> None:
+    """Apply the three industry scans to one stock, given its group row and peer percentile."""
+    m["peer_pct"], m["ind_pct"] = pp, g["pct"]
+    # 11. Stock Leads Group
+    if (m["T"] >= 70 and m["RS"] >= 85 and m["rs_accel"] > 0 and pp >= 85
+            and m["RS"] - g["rs"] >= 15 and 25 <= g["pct"] < 75
+            and g["accel"] >= CFG["group_stable_accel"]):
+        m["scans"].append("slg")
+    # 12. Group Rotation Leaders
+    if (35 <= g["pct"] < 75 and g["accel"] > 0 and g["improving"] >= 0.5
+            and pp >= 70 and m["RS"] >= 65 and m["M"] >= 65):
+        m["scans"].append("grl")
+    # 13. Group-Confirmed Leaders
+    if (m["T"] >= 65 and m["RS"] >= 75 and m["above50"]
+            and g["pct"] >= 75 and pp >= 70):
+        m["scans"].append("gcl")
+
+
+def group_pass(stocks: Dict[str, dict], core: Optional[set] = None) -> List[dict]:
+    """
+    Industry statistics come from the `core` symbols only (the Russell 1000,
+    so group ranks are measured on the same universe as the reference scanner).
+    Stocks outside the core are then ranked against their industry's core peers.
+    """
+    if not core:
+        core = set(stocks)
     groups: Dict[str, List[str]] = {}
     for sym, m in stocks.items():
-        key = m.get("group")
-        if key:
-            groups.setdefault(key, []).append(sym)
+        if m.get("group") and sym in core:
+            groups.setdefault(m["group"], []).append(sym)
 
     rows = []
     for key, syms in groups.items():
@@ -440,25 +538,16 @@ def group_pass(stocks: Dict[str, dict]) -> List[dict]:
     for row, p in zip(rows, pct_rank([r["rs"] for r in rows])):
         row["pct"] = p
 
+    by_name = {g["name"]: g for g in rows}
     for g in rows:
-        peers = pct_rank([stocks[s]["RS"] for s in g["syms"]])
-        for s, pp in zip(g["syms"], peers):
-            m = stocks[s]
-            m["peer_pct"], m["ind_pct"] = pp, g["pct"]
-            mid = 25 <= g["pct"] < 75
-            # 11. Stock Leads Group
-            if (m["T"] >= 70 and m["RS"] >= 85 and m["rs_accel"] > 0 and pp >= 85
-                    and m["RS"] - g["rs"] >= 15 and mid
-                    and g["accel"] >= CFG["group_stable_accel"]):
-                m["scans"].append("slg")
-            # 12. Group Rotation Leaders
-            if (35 <= g["pct"] < 75 and g["accel"] > 0 and g["improving"] >= 0.5
-                    and pp >= 70 and m["RS"] >= 65 and m["M"] >= 65):
-                m["scans"].append("grl")
-            # 13. Group-Confirmed Leaders
-            if (m["T"] >= 65 and m["RS"] >= 75 and m["above50"]
-                    and g["pct"] >= 75 and pp >= 70):
-                m["scans"].append("gcl")
+        for s, pp in zip(g["syms"], pct_rank([_peer_key(stocks[s]) for s in g["syms"]])):
+            _group_rules(stocks[s], g, pp)
+    for sym, m in stocks.items():
+        g = by_name.get(m.get("group"))
+        if g is None or sym in core:
+            continue
+        mine = _peer_key(m)
+        _group_rules(m, g, float(np.mean([_peer_key(stocks[s]) < mine for s in g["syms"]])) * 100)
     rows.sort(key=lambda r: -r["pct"])
     return rows
 
@@ -476,19 +565,15 @@ def squeeze_pass(stocks: Dict[str, dict], si: Dict[str, dict]) -> None:
 # --------------------------------------------------------------------------
 # Universe
 # --------------------------------------------------------------------------
-WIKI = {
-    "R1000": ("https://en.wikipedia.org/wiki/Russell_1000_Index", 800),
-    "SP500": ("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", 450),
-    "SP400": ("https://en.wikipedia.org/wiki/List_of_S%26P_400_companies", 350),
-    "SP600": ("https://en.wikipedia.org/wiki/List_of_S%26P_600_companies", 500),
-}
-_ISH = "https://www.ishares.com/us/products/{}/1467271812596.ajax?fileType=csv&fileName={}_holdings&dataType=fund"
-ISHARES = {
-    "R1000": _ISH.format("239707/ishares-russell-1000-etf", "IWB"),
-    "SP500": _ISH.format("239726/ishares-core-sp-500-etf", "IVV"),
-    "SP400": _ISH.format("239763/ishares-core-sp-midcap-etf", "IJH"),
-    "SP600": _ISH.format("239774/ishares-core-sp-smallcap-etf", "IJR"),
-}
+_WIKI = "https://en.wikipedia.org/wiki/List_of_S%26P_{}_companies"
+_ISH = "https://www.ishares.com/us/products/{}/latest-holdings.csv"
+# index, Wikipedia table (None when Wikipedia has no member list), minimum rows, iShares fund
+SOURCES = [
+    ("SP500", _WIKI.format("500"), 450, "239726/ishares-core-sp-500-etf"),
+    ("SP400", _WIKI.format("400"), 350, "239763/ishares-core-sp-midcap-etf"),
+    ("SP600", _WIKI.format("600"), 500, "239774/ishares-core-sp-smallcap-etf"),
+    ("R1000", None, 800, "239707/ishares-russell-1000-etf"),
+]
 SHARE_CLASS = {"BRKB": "BRK-B", "BFB": "BF-B", "BFA": "BF-A", "LENB": "LEN-B", "HEIA": "HEI-A",
                "UHALB": "UHAL-B", "MOGA": "MOG-A", "CWENA": "CWEN-A", "GEFB": "GEF-B"}
 SYM_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
@@ -534,13 +619,15 @@ def parse_wiki_tables(html: str, min_rows: int) -> List[dict]:
 
 
 def parse_ishares_csv(text: str) -> List[dict]:
-    lines = text.splitlines()
+    lines = text.lstrip("\ufeff").splitlines()
     start = next((k for k, ln in enumerate(lines) if ln.startswith("Ticker,")), None)
     if start is None:
         return []
     out = []
     for r in csv.DictReader(lines[start:]):
         if (r.get("Asset Class") or "").strip() != "Equity":
+            continue
+        if "NO MARKET" in (r.get("Exchange") or "").upper():      # delisted remnants
             continue
         raw = (r.get("Ticker") or "").strip().upper()
         sym = SHARE_CLASS.get(raw) or norm_symbol(raw)
@@ -566,19 +653,23 @@ def http_get(url: str, ua: str = UA, timeout: int = 30) -> str:
 
 def build_universe() -> List[dict]:
     merged: Dict[str, dict] = {}
-    for idx, (url, min_rows) in WIKI.items():
+    for idx, wiki_url, min_rows, fund in SOURCES:
         rows: List[dict] = []
-        try:
-            rows = parse_wiki_tables(http_get(url), min_rows)
-            log(f"  {idx}: {len(rows)} names from Wikipedia")
-        except Exception as e:      # noqa: BLE001
-            log(f"  {idx}: Wikipedia failed ({e})")
-        if not rows:
+        if wiki_url:
             try:
-                rows = parse_ishares_csv(http_get(ISHARES[idx], BROWSER_UA))
+                rows = parse_wiki_tables(http_get(wiki_url), min_rows)
+                log(f"  {idx}: {len(rows)} names from Wikipedia")
+            except Exception as e:      # noqa: BLE001
+                log(f"  {idx}: Wikipedia failed ({e})")
+        if len(rows) < min_rows:
+            try:
+                rows = parse_ishares_csv(http_get(_ISH.format(fund), BROWSER_UA))
                 log(f"  {idx}: {len(rows)} names from iShares holdings")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:      # noqa: BLE001
                 log(f"  {idx}: iShares failed ({e})")
+            if len(rows) < min_rows:
+                log(f"  {idx}: WARNING - member list unavailable ({len(rows)} rows)")
+                rows = []
         for r in rows:
             cur = merged.setdefault(r["s"], {"s": r["s"], "n": None, "sec": None, "ind": None, "idx": []})
             for k in ("n", "sec", "ind"):
@@ -589,22 +680,37 @@ def build_universe() -> List[dict]:
     return sorted(merged.values(), key=lambda r: r["s"])
 
 
+def _has(stocks: List[dict], idx: str) -> int:
+    return sum(1 for s in stocks if idx in s.get("idx", []))
+
+
 def load_universe(out_dir: str, max_age_days: int = 7) -> List[dict]:
     path = os.path.join(out_dir, "universe.json")
+    core = CFG["core_index"]
     cached = None
     if os.path.exists(path):
         with open(path) as f:
             cached = json.load(f)
         age = (dt.date.today() - dt.date.fromisoformat(cached["built"])).days
-        if age < max_age_days and len(cached["stocks"]) > 500:
+        if age < max_age_days and _has(cached["stocks"], core) >= 800:
             log(f"Universe: {len(cached['stocks'])} names (cached {cached['built']})")
             return cached["stocks"]
     log("Universe: rebuilding index membership")
     stocks = build_universe()
-    if len(stocks) >= 1000:
+    if cached and not _has(stocks, core) and _has(cached["stocks"], core):
+        # keep last known Russell 1000 membership rather than lose it for a week
+        log(f"Universe: {core} list unavailable today, carrying over the cached membership")
+        by = {s["s"]: s for s in stocks}
+        for old in cached["stocks"]:
+            if core in old.get("idx", []):
+                cur = by.setdefault(old["s"], dict(old, idx=[]))
+                if core not in cur["idx"]:
+                    cur["idx"].append(core)
+        stocks = sorted(by.values(), key=lambda r: r["s"])
+    if len(stocks) >= 900:
         with open(path, "w") as f:
             json.dump({"built": dt.date.today().isoformat(), "stocks": stocks}, f, separators=(",", ":"))
-        log(f"Universe: {len(stocks)} names")
+        log(f"Universe: {len(stocks)} names ({core}: {_has(stocks, core)})")
         return stocks
     if cached:
         log(f"Universe: rebuild came back short ({len(stocks)}), keeping cached list")
@@ -636,7 +742,7 @@ def fetch_yf(symbols: List[str], batch: int = 100) -> Dict[str, dict]:
         for attempt in range(3):
             try:
                 df = yf.download(chunk, period=CFG["history_period"], interval="1d",
-                                 auto_adjust=True, group_by="ticker", threads=True,
+                                 auto_adjust=CFG["dividend_adjusted"], group_by="ticker", threads=True,
                                  progress=False, timeout=30)
                 if df is not None and len(df):
                     break
@@ -660,7 +766,7 @@ def fetch_yf(symbols: List[str], batch: int = 100) -> Dict[str, dict]:
 
 
 def fetch_direct(sym: str) -> Optional[dict]:
-    """Fallback: Yahoo chart endpoint, adjusted here by the adjclose ratio."""
+    """Fallback: Yahoo chart endpoint (already split-adjusted; dividends optional)."""
     import requests
     url = (f"https://query2.finance.yahoo.com/v8/finance/chart/{sym}"
            f"?range={CFG['history_period']}&interval=1d&events=div%2Csplits")
@@ -675,9 +781,9 @@ def fetch_direct(sym: str) -> Optional[dict]:
                                        q["close"], q["volume"], adj):
             if None in (o, h, l, c, a) or c <= 0:
                 continue
-            f = a / c
+            f = a / c if CFG["dividend_adjusted"] else 1.0
             day = dt.datetime.fromtimestamp(t + off, dt.timezone.utc).strftime("%Y-%m-%d")
-            rows.append((day, o * f, h * f, l * f, a, v or 0))
+            rows.append((day, o * f, h * f, l * f, c * f, v or 0))
         if not rows:
             return None
         cols = list(zip(*rows))
@@ -720,44 +826,68 @@ def align(bars: dict, bench: dict) -> Optional[dict]:
 
 
 # --------------------------------------------------------------------------
-# Short interest (cached; only looked up for stocks that pass the price side)
+# Yahoo profiles: industry, market cap, short interest (one cached lookup per stock)
 # --------------------------------------------------------------------------
-def fetch_short_interest(sym: str) -> Optional[dict]:
+def fetch_profile(sym: str) -> Optional[dict]:
     import yfinance as yf
     info = yf.Ticker(sym).info or {}
+    ind, mcap = info.get("industry"), info.get("marketCap")
     pct, dtc = info.get("shortPercentOfFloat"), info.get("shortRatio")
-    if pct is None and dtc is None:
+    if not ind and mcap is None and pct is None and dtc is None:
         return None
-    return {"pct": round(pct * 100, 2) if pct is not None else None,
+    return {"ind": ind or None, "mcap": float(mcap) if mcap else None,
+            "pct": round(pct * 100, 2) if pct is not None else None,
             "dtc": round(float(dtc), 2) if dtc is not None else None}
 
 
-def update_short_interest(out_dir: str, candidates: List[str], today: str) -> Dict[str, dict]:
-    path = os.path.join(out_dir, "short_interest.json")
+def update_profiles(out_dir: str, urgent: List[str], core: List[str], others: List[str],
+                    today: str) -> Dict[str, dict]:
+    """
+    Lookup order: squeeze candidates whose short interest is stale, then core
+    (Russell 1000) names never looked up, then the rest, then the oldest
+    records. Capped per night; whatever is left is picked up on later nights.
+    """
+    path = os.path.join(out_dir, "profiles.json")
     cache: Dict[str, dict] = {}
     if os.path.exists(path):
         with open(path) as f:
             cache = json.load(f)
     t0 = dt.date.fromisoformat(today)
 
-    def stale(s):
+    def age(s):
         rec = cache.get(s)
-        return not rec or (t0 - dt.date.fromisoformat(rec["on"])).days >= CFG["si_ttl_days"]
+        return 10 ** 6 if not rec else (t0 - dt.date.fromisoformat(rec["on"])).days
 
-    todo = [s for s in candidates if stale(s)][: CFG["si_max_lookups"]]
-    log(f"Short interest: {len(candidates)} candidates, {len(todo)} lookups")
-    fails = 0
+    todo, seen = [], set()
+
+    def add(seq):
+        for s in seq:
+            if s not in seen:
+                seen.add(s)
+                todo.append(s)
+    add(s for s in urgent if age(s) >= CFG["si_ttl_days"])
+    add(s for s in core if s not in cache)
+    add(s for s in others if s not in cache)
+    add(sorted((s for s in list(core) + list(others) if age(s) >= CFG["profile_ttl_days"]), key=lambda s: -age(s)))
+    todo = todo[: CFG["profile_max_lookups"]]
+    log(f"Profiles: {len(cache)} cached, {len(todo)} lookups tonight")
+    fails = done = 0
     for s in todo:
         try:
-            rec = fetch_short_interest(s)
-            cache[s] = dict(rec or {"pct": None, "dtc": None}, on=today)
-            fails = 0
+            rec = fetch_profile(s)
+            old = cache.get(s) or {}
+            new = dict(rec or {"ind": None, "mcap": None, "pct": None, "dtc": None}, on=today)
+            if not new.get("ind") and old.get("ind"):        # never lose a known industry
+                new["ind"] = old["ind"]
+            cache[s] = new
+            fails, done = 0, done + 1
         except Exception:           # noqa: BLE001
             fails += 1
             if fails >= 10:
-                log("  short-interest lookups failing, stopping for today")
+                log("  profile lookups failing, stopping for today")
                 break
         time.sleep(0.35)
+    log(f"Profiles: {done} updated")
     with open(path, "w") as f:
         json.dump(cache, f, separators=(",", ":"), sort_keys=True)
     return cache
@@ -782,7 +912,7 @@ COLS = ["sym", "name", "sec", "ind", "close", "chg", "score", "T", "RS", "M", "d
         "rsAccel", "rvol", "ext", "offHigh", "atrPct", "dvolM", "s20", "s50", "s200",
         "pivot", "low20", "hi52", "atr", "rsi", "r1", "r3", "r6", "ex12", "ex6", "ex3",
         "slope50", "share60", "accel", "peerPct", "indPct", "si", "dtc", "ev",
-        "scans", "newScans", "note"]
+        "scans", "newScans", "note", "r1k", "mcapB"]
 
 
 def stock_row(sym: str, m: dict, prev: dict) -> list:
@@ -807,6 +937,8 @@ def stock_row(sym: str, m: dict, prev: dict) -> list:
         m["scans"],
         [s for s in m["scans"] if "scans" in p and s not in p["scans"]],
         m.get("note") or None,
+        1 if m.get("core") else 0,
+        rnd(m["mcap"] / 1e9, 2) if m.get("mcap") else None,
     ]
 
 
@@ -904,6 +1036,10 @@ def run(out_dir: str, force: bool = False, limit: Optional[int] = None) -> int:
         universe = universe[:limit]
     meta = {u["s"]: u for u in universe}
     bench_sym = CFG["benchmark"]
+    core_idx = CFG["core_index"]
+    core_all = {s for s, u in meta.items() if core_idx in u.get("idx", [])}
+    if not core_all:
+        log(f"WARNING: no {core_idx} members in the universe - group ranks will use every stock")
 
     # Benchmark first: it tells us the latest completed session, so a repeat
     # run on the same day (or a holiday) can stop before fetching 1,900 symbols.
@@ -914,9 +1050,11 @@ def run(out_dir: str, force: bool = False, limit: Optional[int] = None) -> int:
     asof = bench["dates"][-1]
 
     prev_asof, prev = load_previous(out_dir)
-    if prev_asof == asof and not force:
-        log(f"Already published for {asof}; nothing to do.")
-        return 0
+    if prev_asof == asof:
+        if not force:
+            log(f"Already published for {asof}; nothing to do.")
+            return 0
+        prev = {}                   # forced re-run of the same session: no day-over-day deltas
 
     log(f"Session {asof}: fetching daily bars for {len(meta)} stocks")
     prices = fetch_prices([s for s in meta if s != bench_sym])
@@ -937,8 +1075,7 @@ def run(out_dir: str, force: bool = False, limit: Optional[int] = None) -> int:
         if m is None:
             skipped["unscorable"] += 1
             continue
-        m.update(name=u.get("n"), sec=u.get("sec"), ind=u.get("ind"),
-                 group=u.get("ind") or u.get("sec"))
+        m.update(name=u.get("n"), sec=u.get("sec"), gics=u.get("ind"), core=sym in core_all)
         stocks[sym] = m
         series[sym] = {"dates": a["dates"], "c": a["c"], "b": a["b"]}
 
@@ -947,22 +1084,38 @@ def run(out_dir: str, force: bool = False, limit: Optional[int] = None) -> int:
     if coverage < CFG["min_coverage"]:
         raise SystemExit("Coverage too low - data source problem. Not publishing.")
 
-    groups = group_pass(stocks)
-
-    si: Dict[str, dict] = {}
+    # Profiles (industry, market cap, short interest)
+    profiles: Dict[str, dict] = {}
     try:
-        cands = sorted((s for s, m in stocks.items() if m["squeeze_px"]),
-                       key=lambda s: -stocks[s]["M"])
-        si = update_short_interest(out_dir, cands, asof)
+        cands = sorted((s for s, m in stocks.items() if m["squeeze_px"]), key=lambda s: -stocks[s]["M"])
+        by_score = sorted(stocks, key=lambda s: -stocks[s]["score"])
+        profiles = update_profiles(out_dir, cands,
+                                   [s for s in by_score if stocks[s]["core"]],
+                                   [s for s in by_score if not stocks[s]["core"]], asof)
     except Exception as e:          # noqa: BLE001
-        log(f"Short interest unavailable today ({e})")
-    squeeze_pass(stocks, si)
+        log(f"Profiles unavailable today ({e})")
+
+    # One industry taxonomy at a time: Yahoo's once it covers the core, GICS until then.
+    core = {s for s in stocks if stocks[s]["core"]}
+    base = core or set(stocks)
+    cover = sum(1 for s in base if (profiles.get(s) or {}).get("ind")) / max(1, len(base))
+    ind_source = "yahoo" if cover >= CFG["yahoo_industry_min_cover"] else "gics"
+    log(f"Industries: Yahoo covers {cover:.0%} of {'the ' + core_idx if core else 'the universe'} -> using {ind_source}")
+    for sym, m in stocks.items():
+        rec = profiles.get(sym) or {}
+        m["ind"] = rec.get("ind") if ind_source == "yahoo" else m.get("gics")
+        m["group"] = m["ind"]
+        m["mcap"] = rec.get("mcap")
+
+    groups = group_pass(stocks, core)
+    squeeze_pass(stocks, profiles)
 
     order = {s[0]: k for k, s in enumerate(SCANS)}
     for m in stocks.values():
         m["scans"] = sorted(set(m["scans"]), key=order.get)
 
-    rows = [stock_row(s, stocks[s], prev) for s in sorted(stocks, key=lambda s: -stocks[s]["score"])]
+    ranked = sorted(stocks, key=lambda s: -stocks[s]["score"])
+    rows = [stock_row(s, stocks[s], prev) for s in ranked]
     counts = {sid: sum(1 for m in stocks.values() if sid in m["scans"]) for sid, *_ in SCANS}
 
     write_history(out_dir, asof, stocks)
@@ -973,6 +1126,8 @@ def run(out_dir: str, force: bool = False, limit: Optional[int] = None) -> int:
         "generatedAt": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "benchmark": bench_sym,
         "universe": len(meta), "scored": len(stocks), "skipped": skipped,
+        "coreIndex": core_idx, "coreUniverse": len(core_all), "coreScored": len(core),
+        "industrySource": ind_source,
         "shortInterestCovered": sum(1 for m in stocks.values() if m.get("si") is not None),
         "scans": [{"id": s[0], "name": s[1], "mode": s[2], "stage": s[3], "family": s[4],
                    "count": counts[s[0]]} for s in SCANS],
@@ -991,6 +1146,13 @@ def run(out_dir: str, force: bool = False, limit: Optional[int] = None) -> int:
                     for s, m in stocks.items() if m["scans"] or m["score"] >= 70}}
     with open(os.path.join(out_dir, "charts.json"), "w") as f:
         json.dump(charts, f, separators=(",", ":"), allow_nan=False)
+
+    dcols = list(next(iter(stocks.values()))["diag"].keys())
+    diag = {"asOf": asof, "note": "calibration inputs only - not read by the page",
+            "cols": ["sym"] + dcols,
+            "rows": [[s] + [rnd(stocks[s]["diag"][k], 3) for k in dcols] for s in ranked]}
+    with open(os.path.join(out_dir, "diag.json"), "w") as f:
+        json.dump(diag, f, separators=(",", ":"), allow_nan=False)
 
     log(f"Published {asof}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
     return 0
