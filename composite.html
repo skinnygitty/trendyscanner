@@ -41,6 +41,8 @@ nav.site a{color:var(--ink-3)} nav.site a[aria-current]{color:var(--ink)}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:1px}
 .dot.stale{background:var(--burst)}
 
+.banner{margin:16px 0 0;padding:10px 14px;border:1px solid var(--burst);border-left-width:3px;background:var(--surface);color:var(--ink);font-size:13.5px}
+.banner b{font-weight:600} .banner[hidden]{display:none}
 .hero{padding:26px 0 8px;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:28px;align-items:end}
 .hero h1{font-size:30px;line-height:1.1;margin:0 0 8px;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
 .hero p{margin:0;color:var(--ink-2);max-width:62ch}
@@ -192,6 +194,7 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
 </div></header>
 
 <main class="wrap">
+  <div class="banner" id="banner" hidden></div>
   <section class="hero">
     <div>
       <h1>One score from three independent signals.</h1>
@@ -244,7 +247,7 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
   </section>
 
   <section class="panel" id="p-groups" hidden>
-    <p class="rule">Industries ranked by the median relative-strength score of their Russell 1000 members (groups with fewer than 4 are left out). Click a row to see its stocks.</p>
+    <p class="rule">Industries ranked by the average relative-strength score of their Russell 1000 members (industries with fewer than 5 are left out). Click a row to see its stocks.</p>
     <div class="tablebox"><table id="gtbl"><thead></thead><tbody></tbody></table></div>
   </section>
 
@@ -280,21 +283,22 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
       <li>Industry ranks and peer ranks are measured on Russell 1000 members only, whichever universe is shown.</li>
       <li>A stock is left unscored when it has under 260 sessions of history, has no bar for the latest session, or shows a one-day jump that looks like a bad adjustment.</li>
     </ul>
-    <h3>Where this page fills in the blanks</h3>
-    <p>The scoring weights and scan thresholds follow the published rules. Several terms in those rules have no published definition, so this scanner uses its own. They are settings at the top of <span class="mono">scripts/composite_scan.py</span> and easy to change:</p>
+    <h3>How closely this follows the published model</h3>
+    <p>The settings below were fitted against a full export of the reference scanner for one session (979 stocks). "Fitted" means the setting reproduces the reference on that day; "open" means there was too little evidence to decide.</p>
     <ul>
-      <li><b>RSI</b>: the simple-average form (sum of gains ÷ sum of gains and losses over the last 14 sessions), not Wilder's smoothed version. Checked against published scores; the fade below 55 is not yet verified.</li>
-      <li><b>Rising average</b>: the 50-day is higher than 10 sessions ago; the 200-day higher than 20 sessions ago.</li>
-      <li><b>ATR extension</b>: distance above the 20-day average, in 14-day ATRs.</li>
-      <li><b>RS acceleration</b>: 3-month excess return minus half the 6-month excess return.</li>
-      <li><b>55-day pivot</b>: highest high of the prior 55 sessions. A break is "fresh" when no close cleared its own pivot in the 10 sessions before.</li>
-      <li><b>Contracting range and volume</b>: last 10 sessions' average true range ≤ 85%, and volume ≤ 90%, of the 30 sessions before them.</li>
-      <li><b>Prior 6-month leadership</b>: at least 10 points ahead of the benchmark over 6 months, with a 52-week high in the last 63 sessions.</li>
-      <li><b>Near an average</b>: from 0.5 ATR below to 1 ATR above it. <b>Strong close</b>: top 35% of the day's range. <b>Weak close</b>: bottom 35%.</li>
-      <li><b>Gap retained</b>: today's close relative to the gap open, measured from the pre-gap close.</li>
-      <li><b>Industry rank</b>: percentile of the industry's median RS score among all industries. <b>Peer rank</b>: the stock's RS percentile inside its industry, ties broken by unclipped relative strength.</li>
+      <li><b>Scores (fitted)</b>: Trend matches on 96% of stocks, RS on 97% and Momentum on 99.9% given the same inputs. The rest are stocks where the two data sources treat a split or spin-off differently.</li>
+      <li><b>Average alignment (fitted)</b>: 100 when 20 &gt; 50 &gt; 200, 60 when only one of the two pairs holds, 0 otherwise.</li>
+      <li><b>RSI (fitted)</b>: the simple-average form (gains ÷ gains plus losses over the last 14 sessions), not Wilder's smoothed version.</li>
+      <li><b>ATR and extension (fitted)</b>: ATR is the plain 14-session average of true range; extension is the distance from the 21-day exponential average in ATRs.</li>
+      <li><b>Rising average (fitted)</b>: higher than 20 sessions ago.</li>
+      <li><b>RS acceleration, falling RS (fitted on three scans)</b>: the RS score today minus the RS score 21 sessions ago.</li>
+      <li><b>Near the 20- or 50-day (fitted)</b>: within 2% of the 20-day or 2.5% of the 50-day average. <b>Controlled volume</b>: 10-day average volume no more than 1.15× the 50-day.</li>
+      <li><b>Industry rank (fitted)</b>: the average RS score of an industry's Russell 1000 members, for industries with at least five, ranked as a percentile. <b>Peer rank</b>: the stock's RS rank within its industry divided by the number of members.</li>
+      <li><b>Breakdown Ready (partly fitted)</b>: finds nearly all of the reference list but also about two-thirds as many extra names; the reference applies a tighter compression test that is not yet identified.</li>
+      <li><b>Open</b>: Fresh Breakouts, Breakout Continuation, Leadership Reclaim, Bearish Burst, Emerging Leaders, Stock Leads Group, Group Rotation Leaders and the two event scans had zero to two matches in the reference that day, so their undefined terms (fresh break, strong close, gap retained, stable industry) are still this page's reading.</li>
+      <li><b>Short interest</b>: Yahoo's percent-of-float runs about 10% higher than the reference's, so Squeeze Radar can differ at the 8% line.</li>
     </ul>
-    <div class="note">Because of those choices, matches here will not be identical to any other scanner built on the same published rules. Treat the lists as a starting point for chart review.</div>
+    <div class="note">Treat every list as a starting point for chart review.</div>
   </section>
 
   <section class="panel" id="p-valid" hidden><div class="prose" id="valid"></div></section>
@@ -307,22 +311,22 @@ footer{border-top:1px solid var(--line);padding:18px 0 40px;color:var(--ink-3);f
 <script>
 "use strict";
 const SCAN_INFO = {
-  el:{d:"Mature uptrends still close to their highs.",r:"Trend and RS ≥ 80 · above rising 50- and 200-day averages · within 15% of the 52-week high · no more than 2.75 ATR extended",j:"A discovery list for longer holds. Wait for an entry setup."},
-  em:{d:"Newer strength improving faster than the long-term picture shows yet.",r:"Not already an established leader · Momentum ≥ 80 · RS ≥ 65 · RS acceleration ≥ 4 pts · rising 50-day",j:"Track for graduation to leadership or a fast trigger."},
-  br:{d:"Strong stocks going quiet just under a 55-day pivot.",r:"Trend ≥ 60 · RS ≥ 65 · above rising 50- and 200-day · within 3% below the pivot · range and volume contracting",j:"Plan the pivot and the invalidation level. No entry yet."},
+  el:{d:"Mature uptrends still close to their highs.",r:"Trend and RS ≥ 80 · above rising 50- and 200-day averages · within 15% of the 52-week high · no more than 2.75 ATR above the 21-day EMA",j:"A discovery list for longer holds. Wait for an entry setup."},
+  em:{d:"Newer strength improving faster than the long-term picture shows yet.",r:"Not already an established leader · Momentum ≥ 80 · RS ≥ 65 · RS score up ≥ 4 pts in a month · rising 50-day",j:"Track for graduation to leadership or a fast trigger."},
+  br:{d:"Strong stocks going quiet just under a 55-day pivot.",r:"Trend ≥ 60 · RS ≥ 65 · above rising 50- and 200-day · within 3% below a pivot at least 5 sessions old · 10-day range ≤ 85% and volume ≤ 90% of the 50-day",j:"Plan the pivot and the invalidation level. No entry yet."},
   fb:{d:"First close through the pivot, on volume.",r:"Trend ≥ 60 · RS ≥ 65 · 0–5% through the 55-day pivot · relative volume ≥ 1.35× · strong close · ≤ 2.75 ATR extended",j:"Review for entry now."},
   bc:{d:"A recent breakout that held its pivot and is turning up again.",r:"First 55-day break 2–10 sessions ago · every close since held the pivot · Trend and RS ≥ 70 · quiet volume · closes above the prior day's high",j:"A second entry without chasing the first move."},
-  cp:{d:"Leaders resetting toward support in an orderly way.",r:"Trend and RS ≥ 70 · prior 6-month leadership · near the 20- or 50-day average · rising 200-day · quiet volume",j:"Watch support. Wait for price to turn before considering entry."},
-  pc:{d:"A controlled pullback that just reversed off support.",r:"Trend and RS ≥ 70 · prior 6-month leadership · rising 200-day · low near the 20- or 50-day · closes above the prior day's high in the top 35% of its range",j:"Review a pullback entry; the support low is the reference."},
-  lr:{d:"A former leader taking back its 50-day after a real reset.",r:"Trend and RS ≥ 55 · positive 6-month return · above a rising 200-day · crosses back above the 50-day on ≥ 1.2× volume · positive RS acceleration",j:"Review a re-entry; the reclaim day's low is the reference."},
+  cp:{d:"Leaders resetting toward support in an orderly way.",r:"Trend and RS ≥ 70 · prior 6-month leadership · within 2% of the 20-day or 2.5% of the 50-day · rising 200-day · 10-day volume ≤ 1.15× the 50-day",j:"Watch support. Wait for price to turn before considering entry."},
+  pc:{d:"A controlled pullback that just reversed off support.",r:"Trend and RS ≥ 70 · prior 6-month leadership · rising 200-day · within 2% of the 20-day or 2.5% of the 50-day · closes above the prior day's high in the top 35% of its range",j:"Review a pullback entry; the support low is the reference."},
+  lr:{d:"A former leader taking back its 50-day after a real reset.",r:"Trend and RS ≥ 55 · positive 6-month return · above a rising 200-day · crosses back above the 50-day on ≥ 1.2× volume · RS score higher than a month ago",j:"Review a re-entry; the reclaim day's low is the reference."},
   ei:{d:"A fresh high-volume gap that is holding in its first three sessions.",r:"Gap ≥ 4% in the last 3 sessions · gap-day volume ≥ 1.5× · ≥ 70% of the gap retained · Momentum ≥ 65 · RS ≥ 65",j:"Fast trade. Progress should be immediate."},
   ed:{d:"A high-volume gap still defended after the first volatile days.",r:"Gap ≥ 4% between 4 and 20 sessions ago · gap-day volume ≥ 1.5× · ≥ 80% retained · Trend ≥ 60 · RS ≥ 70",j:"Review a continuation entry around the defended gap level."},
-  slg:{d:"A standout stock in an industry that has not confirmed yet.",r:"Trend ≥ 70 · RS ≥ 85 · positive RS acceleration · top 15% of peers · RS ≥ 15 pts above the industry median · industry in the 25th–74th percentile and stable",j:"Watch for the group to follow, or demand an exceptional standalone trigger."},
-  grl:{d:"Leading stocks inside industries that are improving but not yet leading.",r:"Industry in the 35th–74th percentile · industry RS accelerating · at least half of peers improving · stock in the top 30% of peers · RS and Momentum ≥ 65",j:"Track the emerging theme; wait for the stock's own setup."},
+  slg:{d:"A standout stock in an industry that has not confirmed yet.",r:"Trend ≥ 70 · RS ≥ 85 · RS score higher than a month ago · top 15% of peers · RS ≥ 15 pts above the industry average · industry in the 25th–74th percentile and stable",j:"Watch for the group to follow, or demand an exceptional standalone trigger."},
+  grl:{d:"Leading stocks inside industries that are improving but not yet leading.",r:"Industry in the 35th–74th percentile · industry average RS rising · at least half of peers improving · stock in the top 30% of peers · RS and Momentum ≥ 65",j:"Track the emerging theme; wait for the stock's own setup."},
   gcl:{d:"Leaders backed by a top-quartile industry.",r:"Trend ≥ 65 · RS ≥ 75 · above the 50-day · industry in the top quartile · stock in the top 30% of peers",j:"Raises priority. Group support confirms; it never triggers an entry."},
-  bdr:{d:"Weak stocks compressing just above support.",r:"RS ≤ 45 · Momentum ≤ 50 · below the 20-day · within 5% of the 20-day low · falling RS · range and volume contracting",j:"Plan a defined-risk bearish trade. Enter only if support breaks on volume."},
+  bdr:{d:"Weak stocks compressing just above support.",r:"RS ≤ 45 · Momentum ≤ 50 · below the 20-day · within 5% above the 20-day low, not undercut today · RS score lower than a month ago · 10-day range and volume below their 50-day averages · close in the lower 60% of the day's range",j:"Plan a defined-risk bearish trade. Enter only if support breaks on volume."},
   bb:{d:"A decisive break of support with range and volume expanding.",r:"Fresh close below the 20- or 50-day low · RS ≤ 55 · Momentum ≤ 45 · down 1.5–10% · range 1.15–3.5 ATR · relative volume ≥ 1.25× · weak close",j:"Review a defined-risk bearish trade. Downside should follow through at once."},
-  sq:{d:"Heavily shorted stocks where price is starting to press.",r:"Short interest ≥ 8% of float · days to cover ≥ 2.5 · Momentum ≥ 60 · RS ≥ 55 · above the 20-day and within 8% of the 20-day high · RS not decelerating",j:"A radar list. Enter only on a separate price-and-volume trigger."}
+  sq:{d:"Heavily shorted stocks where price is starting to press.",r:"Short interest ≥ 8% of float · days to cover ≥ 2.5 · Momentum ≥ 60 · RS ≥ 55 · above the 20-day and within 8% of the 20-day high · RS score not lower than a month ago",j:"A radar list. Enter only on a separate price-and-volume trigger."}
 };
 const GATES = [["score","Composite score","Overall condition","Score"],["T","Trend","Price structure","Trend"],["RS","Relative strength","Versus benchmark","RS"],["M","Momentum","Rate and acceleration","Momentum"]];
 const STAGE_RANK = {Trigger:0, Setup:1, Watch:2, State:3, Overlay:4};
@@ -344,10 +348,11 @@ const COLDEFS = [
   {k:"T", h:"Trend", html:s=>meter(s.T)},
   {k:"RS", h:"RS", html:s=>meter(s.RS)},
   {k:"M", h:"Mom", html:s=>meter(s.M)},
-  {k:"rsAccel", h:"RS acc", html:s=>sgn(s.rsAccel,1), title:"3-month excess return minus half the 6-month excess return (points)"},
+  {k:"rsAccel", h:"RS Δ1M", html:s=>sgn(s.rsAccel,0), title:"Change in the RS score over the last 21 sessions"},
   {k:"rvol", h:"RVol", html:s=>s.rvol==null?"—":fmt(s.rvol,2)+"×", title:"Today's volume ÷ 50-day average"},
-  {k:"ext", h:"Ext ATR", html:s=>fmt(s.ext,2), title:"ATRs above (+) or below (−) the 20-day average"},
+  {k:"ext", h:"Ext ATR", html:s=>fmt(s.ext,2), title:"ATRs above (+) or below (−) the 21-day exponential average"},
   {k:"offHigh", h:"Off high", html:s=>s.offHigh==null?"—":fmt(s.offHigh,1)+"%", title:"Distance from the 52-week high"},
+  {k:"adr", h:"ADR %", html:s=>s.adr==null?'<span class="mute">—</span>':fmt(s.adr,2)+"%", title:"Average high-to-low range over the last 20 sessions"},
   {k:"mcapB", h:"Mkt cap", html:s=>s.mcapB==null?'<span class="mute">—</span>':"$"+fmt(s.mcapB, s.mcapB>=100?0:s.mcapB>=10?1:2)+"B", title:"Market capitalisation"},
   {k:"nScans", h:"Playbook", l:1, cls:"scans", html:s=>rowTags(s), title:"Scans this stock matches today. Sorts by number of matches."}
 ];
@@ -380,7 +385,7 @@ async function load(){
   const ci = DATA.cols;
   ALL = DATA.rows.map(r => {const o = {}; ci.forEach((c, i) => o[c] = r[i]); o.nScans = o.scans.length; o.newScans = o.newScans || []; return o;});
   HAS_CORE = ALL.some(s => s.r1k) && !ALL.every(s => s.r1k);
-  if(!ALL.some(s => s.mcapB != null)) COLDEFS.splice(COLDEFS.findIndex(c => c.k === "mcapB"), 1);
+  for(const k of ["mcapB", "adr"]) if(!ALL.some(s => s[k] != null)) COLDEFS.splice(COLDEFS.findIndex(c => c.k === k), 1);
   DATA.scans.forEach(s => SCANS[s.id] = Object.assign({}, s, SCAN_INFO[s.id]));
   const h = new URLSearchParams(location.hash.slice(1));
   if(SCANS[h.get("scan")]) state.scan = h.get("scan");
@@ -388,8 +393,30 @@ async function load(){
   /* Default to the Russell 1000, the universe the scoring model was built on; the wider list is one click away. */
   state.uni = HAS_CORE && h.get("u") !== "all" ? "r1k" : "all";
   $("#uniF").style.display = HAS_CORE ? "" : "none"; $("#uni").value = state.uni;
-  renderGates(); renderHead(); applyUniverse(); renderGroups(); renderValidation();
+  renderGates(); renderHead(); applyUniverse(); renderGroups(); renderValidation(); renderBanner();
   $("#benchName").textContent = DATA.benchmark;
+}
+
+/* Say so plainly when a session is incomplete or tonight's data has not arrived yet. */
+async function renderBanner(){
+  const day = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", {weekday: "long", month: "short", day: "numeric"});
+  const msgs = [];
+  const total = DATA.coreUniverse || 0, got = DATA.coreScored || 0, miss = DATA.coreMissing || 0;
+  if(DATA.partial || (total && got < 0.9 * total)){
+    const n = miss || (total - got);
+    msgs.push(`<b>Incomplete session.</b> ${n.toLocaleString()} of ${total.toLocaleString()} Russell 1000 stocks had no price bar for ${day(DATA.asOf)} when the scan ran, so they are missing from every list below. The scan retries automatically and replaces this once the data is complete.`);
+  }
+  try{
+    const r = await fetch("data/composite/status.json?v=" + Date.now());
+    if(r.ok){
+      const st = await r.json();
+      if(st.published === false && st.asOf > DATA.asOf){
+        const at = new Date(st.attempt).toLocaleTimeString("en-US", {hour: "numeric", minute: "2-digit"});
+        msgs.push(`<b>${day(st.asOf)} is not published yet.</b> At ${at} the data source was still missing that day's bar for ${st.missing.toLocaleString()} of ${st.of.toLocaleString()} stocks. Showing ${day(DATA.asOf)}; the scan retries through the evening.`);
+      }
+    }
+  }catch(e){}
+  const el = $("#banner"); el.hidden = !msgs.length; el.innerHTML = msgs.join("<br>");
 }
 
 function applyUniverse(){
@@ -532,7 +559,7 @@ function render(){
 
 function renderGroups(){
   const g = DATA.groups || [];
-  const cols = [["name","Industry",1],["n","Stocks"],["pct","Rank pct"],["rs","Median RS"],["accel","RS acc"],["improving","% improving"],["score","Median score"]];
+  const cols = [["name","Industry",1],["n","Stocks"],["pct","Rank pct"],["rs","Mean RS"],["accel","RS Δ1M"],["improving","% improving"],["score","Mean score"]];
   $("#gtbl thead").innerHTML = "<tr>" + cols.map(c => `<th class="${c[2]?"l":""}" style="cursor:default">${c[1]}</th>`).join("") + "</tr>";
   $("#gtbl tbody").innerHTML = g.map(r => `<tr data-ind="${esc(r.name)}" tabindex="0"><td class="l">${esc(r.name)}</td><td class="num">${r.n}</td><td class="num">${meter(r.pct)}</td><td class="num">${fmt(r.rs,0)}</td><td class="num">${sgn(r.accel,1)}</td><td class="num">${fmt(r.improving,0)}%</td><td class="num">${fmt(r.score,0)}</td></tr>`).join("")
     || '<tr><td class="l" colspan="7">No industry data on this run.</td></tr>';
@@ -579,7 +606,7 @@ async function openDetail(sym){
         ${kv("vs 20 / 50 / 200-day", [s.s20,s.s50,s.s200].map(m=>s.close>m?"above":"below").join(" / "))}
         ${kv("50-day slope (20 sessions)", sgn(s.slope50,2,"%"))}${kv("Off 52-week high", fmt(s.offHigh,1)+"%")}${kv("Closes above 50-day, last 60", fmt(s.share60,0)+"%")}</table></div>
       <div class="block"><h4>Relative strength inputs</h4><table>
-        ${kv("12-month vs benchmark", sgn(s.ex12,1," pts"))}${kv("6-month", sgn(s.ex6,1," pts"))}${kv("3-month", sgn(s.ex3,1," pts"))}${kv("RS acceleration", sgn(s.rsAccel,1," pts"))}
+        ${kv("12-month vs benchmark", sgn(s.ex12,1," pts"))}${kv("6-month", sgn(s.ex6,1," pts"))}${kv("3-month", sgn(s.ex3,1," pts"))}${kv("RS score change, 1 month", sgn(s.rsAccel,0," pts"))}
         ${s.indPct!=null?kv("Industry rank / peer rank", fmt(s.indPct,0)+" / "+fmt(s.peerPct,0)):""}</table></div>
       <div class="block"><h4>Momentum inputs</h4><table>
         ${kv("1-month return", sgn(s.r1,1,"%"))}${kv("3-month return", sgn(s.r3,1,"%"))}${kv("Acceleration", sgn(s.accel,1," pts"))}${kv("RSI(14)", fmt(s.rsi,0))}${kv("Relative volume", fmt(s.rvol,2)+"×")}</table></div>
@@ -660,7 +687,7 @@ $("#tbl tbody").onkeydown = e => { if(e.key === "Enter"){ const tr = e.target.cl
 $("#dlg").addEventListener("click", e => { if(e.target === $("#dlg")) $("#dlg").close(); });
 $("#copy").onclick = async () => { const t = filtered().map(s => s.sym).join(","); try{ await navigator.clipboard.writeText(t); flash("#copy", "Copied"); }catch(e){ flash("#copy", "Blocked"); } };
 $("#csv").onclick = () => {
-  const cols = ["sym","name","sec","ind","close","chg","score","T","RS","M","rsAccel","rvol","ext","offHigh","pivot","s20","s50","s200","mcapB"];
+  const cols = ["sym","name","sec","ind","close","chg","score","T","RS","M","rsAccel","rvol","ext","offHigh","pivot","s20","s50","s200","adr","mcapB"];
   const q = v => v == null ? "" : /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
   const body = filtered().map(s => cols.map(c => q(s[c])).concat(q(s.scans.map(id => SCANS[id].name).join("; "))).join(",")).join("\n");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([cols.join(",") + ",scans\n" + body], {type: "text/csv"}));
