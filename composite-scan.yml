@@ -1,0 +1,101 @@
+name: Composite scan (nightly)
+
+# GitHub schedules run in UTC and ignore daylight saving, so the job is queued
+# several times and the first step decides what each run may do:
+#   - before 6 pm New York time: nothing
+#   - 6 pm to midnight: publish only if (nearly) every stock has today's bar;
+#     otherwise leave the previous session up and let a later run retry
+#   - the early-morning run: last attempt, publishes whatever is available and
+#     flags it as partial on the page
+# The scan is a no-op once a complete session is published.
+on:
+  schedule:
+    - cron: "7 22 * * 1-5"    # 6:07 pm ET (daylight time)
+    - cron: "7 23 * * 1-5"    # 6:07 pm ET (standard time) / 7:07 pm retry
+    - cron: "7 1 * * 2-6"     # 8-9 pm ET retry
+    - cron: "7 3 * * 2-6"     # 10-11 pm ET retry
+    - cron: "37 9 * * 2-6"    # 4:37-5:37 am ET, last attempt
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-run even if this session is already published"
+        type: boolean
+        default: false
+      allow_partial:
+        description: "Publish even if many stocks lack the latest bar"
+        type: boolean
+        default: false
+      dump_bars:
+        description: "Also export recent daily bars (bars.json.gz) for calibration"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: composite-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04          # pinned: ubuntu-latest moves to 26.04 from 2026-10-19
+    timeout-minutes: 60
+    steps:
+      - name: Decide what this run may do
+        id: gate
+        run: |
+          hour=$(TZ=America/New_York date +%-H)
+          flags=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            go=yes
+            [ "${{ inputs.force }}" = "true" ] && flags="$flags --force"
+            [ "${{ inputs.allow_partial }}" = "true" ] && flags="$flags --allow-partial"
+            [ "${{ inputs.dump_bars }}" = "true" ] && flags="$flags --dump-bars"
+          elif [ "$hour" -ge 18 ]; then
+            go=yes
+          elif [ "$hour" -lt 9 ]; then
+            go=yes
+            if [ "$hour" -ge 3 ]; then flags="--allow-partial"; fi
+          else
+            go=no
+            echo "It is ${hour}:xx in New York - waiting for the 6 pm run."
+          fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.go == 'yes'
+
+      - uses: actions/setup-python@v6
+        if: steps.gate.outputs.go == 'yes'
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        if: steps.gate.outputs.go == 'yes'
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run scan
+        if: steps.gate.outputs.go == 'yes'
+        run: python scripts/composite_scan.py ${{ steps.gate.outputs.flags }}
+
+      - name: Publish results
+        if: steps.gate.outputs.go == 'yes'
+        run: |
+          git config user.name "composite-scan-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/composite
+          if git diff --cached --quiet; then
+            echo "No new data to publish."
+            exit 0
+          fi
+          git commit -m "Composite scan $(TZ=America/New_York date +%Y-%m-%d\ %H:%M)"
+          for attempt in 1 2 3; do
+            if git pull --rebase origin main && git push origin HEAD:main; then exit 0; fi
+            sleep 15
+          done
+          echo "::error::Could not push the results to main. If the log above says 'Repository rule violations' or 'Changes must be made through a pull request', remove 'Require a pull request before merging' from the ruleset under Settings > Rules > Rulesets (or add GitHub Actions to its bypass list)."
+          exit 1
