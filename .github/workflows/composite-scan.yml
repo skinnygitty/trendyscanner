@@ -1,18 +1,32 @@
 name: Composite scan (nightly)
 
 # GitHub schedules run in UTC and ignore daylight saving, so the job is queued
-# at 22:07 and 23:07 UTC plus a late retry, and the first step lets it through
-# only once it is 6 pm or later in New York. The scan itself is a no-op when
-# that session is already published, so extra runs cost a few seconds.
+# several times and the first step decides what each run may do:
+#   - before 6 pm New York time: nothing
+#   - 6 pm to midnight: publish only if (nearly) every stock has today's bar;
+#     otherwise leave the previous session up and let a later run retry
+#   - the early-morning run: last attempt, publishes whatever is available and
+#     flags it as partial on the page
+# The scan is a no-op once a complete session is published.
 on:
   schedule:
-    - cron: "7 22 * * 1-5"   # 6:07 pm ET during daylight time
-    - cron: "7 23 * * 1-5"   # 6:07 pm ET during standard time (retry in summer)
-    - cron: "7 1 * * 2-6"    # late retry, 8-9 pm ET
+    - cron: "7 22 * * 1-5"    # 6:07 pm ET (daylight time)
+    - cron: "7 23 * * 1-5"    # 6:07 pm ET (standard time) / 7:07 pm retry
+    - cron: "7 1 * * 2-6"     # 8-9 pm ET retry
+    - cron: "7 3 * * 2-6"     # 10-11 pm ET retry
+    - cron: "37 9 * * 2-6"    # 4:37-5:37 am ET, last attempt
   workflow_dispatch:
     inputs:
       force:
-        description: "Re-run even if today's session is already published"
+        description: "Re-run even if this session is already published"
+        type: boolean
+        default: false
+      allow_partial:
+        description: "Publish even if many stocks lack the latest bar"
+        type: boolean
+        default: false
+      dump_bars:
+        description: "Also export recent daily bars (bars.json.gz) for calibration"
         type: boolean
         default: false
 
@@ -25,24 +39,37 @@ concurrency:
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    runs-on: ubuntu-24.04          # pinned: ubuntu-latest moves to 26.04 from 2026-10-19
+    timeout-minutes: 60
     steps:
-      - name: Only run at or after 6 pm New York time
+      - name: Decide what this run may do
         id: gate
         run: |
           hour=$(TZ=America/New_York date +%-H)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$hour" -ge 18 ]; then
-            echo "go=yes" >> "$GITHUB_OUTPUT"
+          flags=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            go=yes
+            [ "${{ inputs.force }}" = "true" ] && flags="$flags --force"
+            [ "${{ inputs.allow_partial }}" = "true" ] && flags="$flags --allow-partial"
+            [ "${{ inputs.dump_bars }}" = "true" ] && flags="$flags --dump-bars"
+          elif [ "$hour" -ge 18 ]; then
+            go=yes
+          elif [ "$hour" -lt 9 ]; then
+            go=yes
+            if [ "$hour" -ge 3 ]; then flags="--allow-partial"; fi
           else
+            go=no
             echo "It is ${hour}:xx in New York - waiting for the 6 pm run."
-            echo "go=no" >> "$GITHUB_OUTPUT"
           fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: steps.gate.outputs.go == 'yes'
+        with:
+          ref: main          # the branch as it is now, not as it was when this run was queued
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: steps.gate.outputs.go == 'yes'
         with:
           python-version: "3.12"
@@ -55,18 +82,35 @@ jobs:
 
       - name: Run scan
         if: steps.gate.outputs.go == 'yes'
-        run: python scripts/composite_scan.py ${{ inputs.force && '--force' || '' }}
+        run: python scripts/composite_scan.py ${{ steps.gate.outputs.flags }}
 
       - name: Publish results
         if: steps.gate.outputs.go == 'yes'
         run: |
           git config user.name "composite-scan-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          msg="Composite scan $(TZ=America/New_York date +%Y-%m-%d\ %H:%M)"
           git add data/composite
-          if git diff --cached --quiet; then
-            echo "No new data to publish."
-          else
-            git commit -m "Composite scan $(TZ=America/New_York date +%Y-%m-%d)"
-            git pull --rebase
-            git push
-          fi
+          if git diff --cached --quiet; then echo "No new data to publish."; exit 0; fi
+          git commit -q -m "$msg"
+          asof() { python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('asOf',''))" "$1" 2>/dev/null; }
+          for attempt in 1 2 3; do
+            if git pull -q --rebase origin main && git push origin HEAD:main; then exit 0; fi
+            # Another run published while this one was working. Keep this run's
+            # files on top of it, unless that run already has a newer session.
+            git rebase --abort 2>/dev/null || true
+            rm -rf "$RUNNER_TEMP/out" && mkdir -p "$RUNNER_TEMP/out" && cp -r data/composite/. "$RUNNER_TEMP/out/"
+            git fetch -q origin main && git reset -q --hard origin/main
+            ours=$(asof "$RUNNER_TEMP/out/latest.json"); theirs=$(asof data/composite/latest.json)
+            if [ -n "$theirs" ] && [ "$theirs" \> "$ours" ]; then
+              echo "A newer session ($theirs) is already published - nothing to add."; exit 0
+            fi
+            cp -r "$RUNNER_TEMP/out/." data/composite/
+            git add data/composite
+            if git diff --cached --quiet; then echo "Already published by another run."; exit 0; fi
+            git commit -q -m "$msg"
+            if git push origin HEAD:main; then exit 0; fi
+            sleep 15
+          done
+          echo "::error::Could not push the results to main. If the log above mentions 'Repository rule violations' or 'pull request', edit Settings > Rules > Rulesets so the main branch accepts direct pushes (or add GitHub Actions to the bypass list)."
+          exit 1
